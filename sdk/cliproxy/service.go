@@ -896,7 +896,10 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		return
 	}
 
-	GlobalModelRegistry().UnregisterClient(a.ID)
+	// 不要在模型列表为空时自动注销客户端
+	// 这可能是由于临时网络故障或 API 错误导致的
+	// 保留现有注册，避免意外移除已注册的模型
+	log.Warnf("模型列表为空，保留客户端 %s 的现有注册（provider=%s）", a.ID, a.Provider)
 }
 
 func (s *Service) resolveConfigClaudeKey(auth *coreauth.Auth) *config.ClaudeKey {

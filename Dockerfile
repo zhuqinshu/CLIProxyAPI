@@ -1,5 +1,8 @@
 FROM golang:1.24-alpine AS builder
 
+ENV GOPROXY=https://mirrors.cloud.tencent.com/go/,direct
+
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -13,6 +16,8 @@ ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPI ./cmd/server/
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.cloud.tencent.com/g' /etc/apk/repositories
 
 FROM alpine:3.22.0
 

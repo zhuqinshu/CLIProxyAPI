@@ -1189,48 +1189,55 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				}
 
 				statusCode := statusCodeFromResult(result.Error)
+				disableCooling := quotaCooldownDisabledForAuth(auth)
 				switch statusCode {
 				case 401:
-					next := now.Add(30 * time.Minute)
-					state.NextRetryAfter = next
+					if !disableCooling {
+						next := now.Add(30 * time.Minute)
+						state.NextRetryAfter = next
+					}
 					suspendReason = "unauthorized"
-					shouldSuspendModel = true
+					shouldSuspendModel = !disableCooling
 				case 402, 403:
-					next := now.Add(30 * time.Minute)
-					state.NextRetryAfter = next
+					if !disableCooling {
+						next := now.Add(30 * time.Minute)
+						state.NextRetryAfter = next
+					}
 					suspendReason = "payment_required"
-					shouldSuspendModel = true
+					shouldSuspendModel = !disableCooling
 				case 404:
-					next := now.Add(12 * time.Hour)
-					state.NextRetryAfter = next
+					if !disableCooling {
+						next := now.Add(12 * time.Hour)
+						state.NextRetryAfter = next
+					}
 					suspendReason = "not_found"
-					shouldSuspendModel = true
+					shouldSuspendModel = !disableCooling
 				case 429:
 					var next time.Time
 					backoffLevel := state.Quota.BackoffLevel
-					if result.RetryAfter != nil {
-						next = now.Add(*result.RetryAfter)
-					} else {
-						cooldown, nextLevel := nextQuotaCooldown(backoffLevel, quotaCooldownDisabledForAuth(auth))
-						if cooldown > 0 {
-							next = now.Add(cooldown)
+					if !disableCooling {
+						if result.RetryAfter != nil {
+							next = now.Add(*result.RetryAfter)
+						} else {
+							cooldown, nextLevel := nextQuotaCooldown(backoffLevel, disableCooling)
+							if cooldown > 0 {
+								next = now.Add(cooldown)
+							}
+							backoffLevel = nextLevel
 						}
-						backoffLevel = nextLevel
 					}
 					state.NextRetryAfter = next
 					state.Quota = QuotaState{
-						Exceeded:      true,
+						Exceeded:      !disableCooling,
 						Reason:        "quota",
 						NextRecoverAt: next,
 						BackoffLevel:  backoffLevel,
 					}
 					suspendReason = "quota"
-					shouldSuspendModel = true
-					setModelQuota = true
+					shouldSuspendModel = !disableCooling
+					setModelQuota = !disableCooling
 				case 408, 500, 502, 503, 504:
-					if quotaCooldownDisabledForAuth(auth) {
-						state.NextRetryAfter = time.Time{}
-					} else {
+					if !disableCooling {
 						next := now.Add(1 * time.Minute)
 						state.NextRetryAfter = next
 					}
@@ -1461,7 +1468,8 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	if auth == nil {
 		return
 	}
-	auth.Unavailable = true
+	disableCooling := quotaCooldownDisabledForAuth(auth)
+	auth.Unavailable = !disableCooling
 	auth.Status = StatusError
 	auth.UpdatedAt = now
 	if resultErr != nil {
@@ -1474,34 +1482,40 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	switch statusCode {
 	case 401:
 		auth.StatusMessage = "unauthorized"
-		auth.NextRetryAfter = now.Add(30 * time.Minute)
+		if !disableCooling {
+			auth.NextRetryAfter = now.Add(30 * time.Minute)
+		}
 	case 402, 403:
 		auth.StatusMessage = "payment_required"
-		auth.NextRetryAfter = now.Add(30 * time.Minute)
+		if !disableCooling {
+			auth.NextRetryAfter = now.Add(30 * time.Minute)
+		}
 	case 404:
 		auth.StatusMessage = "not_found"
-		auth.NextRetryAfter = now.Add(12 * time.Hour)
+		if !disableCooling {
+			auth.NextRetryAfter = now.Add(12 * time.Hour)
+		}
 	case 429:
 		auth.StatusMessage = "quota exhausted"
-		auth.Quota.Exceeded = true
-		auth.Quota.Reason = "quota"
-		var next time.Time
-		if retryAfter != nil {
-			next = now.Add(*retryAfter)
-		} else {
-			cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel, quotaCooldownDisabledForAuth(auth))
-			if cooldown > 0 {
-				next = now.Add(cooldown)
+		if !disableCooling {
+			auth.Quota.Exceeded = true
+			auth.Quota.Reason = "quota"
+			var next time.Time
+			if retryAfter != nil {
+				next = now.Add(*retryAfter)
+			} else {
+				cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel, disableCooling)
+				if cooldown > 0 {
+					next = now.Add(cooldown)
+				}
+				auth.Quota.BackoffLevel = nextLevel
 			}
-			auth.Quota.BackoffLevel = nextLevel
+			auth.Quota.NextRecoverAt = next
+			auth.NextRetryAfter = next
 		}
-		auth.Quota.NextRecoverAt = next
-		auth.NextRetryAfter = next
 	case 408, 500, 502, 503, 504:
 		auth.StatusMessage = "transient upstream error"
-		if quotaCooldownDisabledForAuth(auth) {
-			auth.NextRetryAfter = time.Time{}
-		} else {
+		if !disableCooling {
 			auth.NextRetryAfter = now.Add(1 * time.Minute)
 		}
 	default:
@@ -1571,7 +1585,6 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 			modelKey = strings.TrimSpace(parsed.ModelName)
 		}
 	}
-	registryRef := registry.GetGlobalRegistry()
 	for _, candidate := range m.auths {
 		if candidate.Provider != provider || candidate.Disabled {
 			continue
@@ -1579,9 +1592,8 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		if _, used := tried[candidate.ID]; used {
 			continue
 		}
-		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
-			continue
-		}
+		// 不再检查 ClientSupportsModel，直接尝试请求
+		// 让 API 返回实际的错误（如 404），而不是提前过滤
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
@@ -1633,7 +1645,6 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 			modelKey = strings.TrimSpace(parsed.ModelName)
 		}
 	}
-	registryRef := registry.GetGlobalRegistry()
 	for _, candidate := range m.auths {
 		if candidate == nil || candidate.Disabled {
 			continue
@@ -1651,9 +1662,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 		if _, ok := m.executors[providerKey]; !ok {
 			continue
 		}
-		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
-			continue
-		}
+		// 不再检查 ClientSupportsModel，直接尝试请求
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
