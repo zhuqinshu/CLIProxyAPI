@@ -178,3 +178,80 @@ func TestApplyAPIKeyModelAlias(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIKeyModelAlias_MultiKeyEntriesLookup(t *testing.T) {
+	cfg := &internalconfig.Config{
+		ClaudeKey: []internalconfig.ClaudeKey{
+			{
+				Name:          "claude-provider",
+				BaseURL:       "https://claude.example.com",
+				APIKeyEntries: []string{"sk-claude-a", "sk-claude-b"},
+				Models: []internalconfig.ClaudeModel{
+					{Name: "claude-opus-4-6", Alias: "any-opus-4-6"},
+				},
+			},
+		},
+		CodexKey: []internalconfig.CodexKey{
+			{
+				Name:          "codex-provider",
+				BaseURL:       "https://codex.example.com",
+				APIKeyEntries: []string{"sk-codex-a", "sk-codex-b"},
+				Models: []internalconfig.CodexModel{
+					{Name: "gpt-5.1-codex", Alias: "codex-main"},
+				},
+			},
+		},
+	}
+
+	mgr := NewManager(nil, nil, nil)
+	mgr.SetConfig(cfg)
+
+	ctx := context.Background()
+	_, _ = mgr.Register(ctx, &Auth{ID: "claude-auth", Provider: "claude", Attributes: map[string]string{"api_key": "sk-claude-b", "base_url": "https://claude.example.com"}})
+	_, _ = mgr.Register(ctx, &Auth{ID: "codex-auth", Provider: "codex", Attributes: map[string]string{"api_key": "sk-codex-b", "base_url": "https://codex.example.com"}})
+
+	if resolved := mgr.lookupAPIKeyUpstreamModel("claude-auth", "any-opus-4-6"); resolved != "claude-opus-4-6" {
+		t.Fatalf("claude alias lookup got %q, want %q", resolved, "claude-opus-4-6")
+	}
+	if resolved := mgr.lookupAPIKeyUpstreamModel("codex-auth", "codex-main"); resolved != "gpt-5.1-codex" {
+		t.Fatalf("codex alias lookup got %q, want %q", resolved, "gpt-5.1-codex")
+	}
+}
+
+func TestApplyAPIKeyModelAlias_MultiKeyEntriesFallbackResolve(t *testing.T) {
+	cfg := &internalconfig.Config{
+		ClaudeKey: []internalconfig.ClaudeKey{
+			{
+				Name:          "claude-provider",
+				BaseURL:       "https://claude.example.com",
+				APIKeyEntries: []string{"sk-claude-a", "sk-claude-b"},
+				Models: []internalconfig.ClaudeModel{
+					{Name: "claude-opus-4-6", Alias: "any-opus-4-6"},
+				},
+			},
+		},
+		CodexKey: []internalconfig.CodexKey{
+			{
+				Name:          "codex-provider",
+				BaseURL:       "https://codex.example.com",
+				APIKeyEntries: []string{"sk-codex-a", "sk-codex-b"},
+				Models: []internalconfig.CodexModel{
+					{Name: "gpt-5.1-codex", Alias: "codex-main"},
+				},
+			},
+		},
+	}
+
+	mgr := NewManager(nil, nil, nil)
+	mgr.SetConfig(cfg)
+
+	claudeAuth := &Auth{Provider: "claude", Attributes: map[string]string{"api_key": "sk-claude-b", "base_url": "https://claude.example.com"}}
+	codexAuth := &Auth{Provider: "codex", Attributes: map[string]string{"api_key": "sk-codex-b", "base_url": "https://codex.example.com"}}
+
+	if resolved := mgr.applyAPIKeyModelAlias(claudeAuth, "any-opus-4-6"); resolved != "claude-opus-4-6" {
+		t.Fatalf("claude apply alias got %q, want %q", resolved, "claude-opus-4-6")
+	}
+	if resolved := mgr.applyAPIKeyModelAlias(codexAuth, "codex-main"); resolved != "gpt-5.1-codex" {
+		t.Fatalf("codex apply alias got %q, want %q", resolved, "gpt-5.1-codex")
+	}
+}

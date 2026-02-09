@@ -29,6 +29,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/claude"
@@ -980,15 +981,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
 	authEntries := util.CountAuthFiles(context.Background(), tokenStore)
-	geminiAPIKeyCount := len(cfg.GeminiKey)
-	claudeAPIKeyCount := len(cfg.ClaudeKey)
-	codexAPIKeyCount := len(cfg.CodexKey)
-	vertexAICompatCount := len(cfg.VertexCompatAPIKey)
-	openAICompatCount := 0
-	for i := range cfg.OpenAICompatibility {
-		entry := cfg.OpenAICompatibility[i]
-		openAICompatCount += len(entry.APIKeyEntries)
-	}
+	geminiAPIKeyCount, vertexAICompatCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := watcher.BuildAPIKeyClients(cfg)
 
 	total := authEntries + geminiAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + vertexAICompatCount + openAICompatCount
 	fmt.Printf("server clients and configuration updated: %d clients (%d auth entries + %d Gemini API keys + %d Claude API keys + %d Codex keys + %d Vertex-compat + %d OpenAI-compat)\n",

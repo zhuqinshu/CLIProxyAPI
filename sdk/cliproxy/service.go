@@ -913,15 +913,15 @@ func (s *Service) resolveConfigClaudeKey(auth *coreauth.Auth) *config.ClaudeKey 
 	}
 	for i := range s.cfg.ClaudeKey {
 		entry := &s.cfg.ClaudeKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
+		keyMatched := providerEntryContainsAPIKey(entry.APIKey, entry.APIKeyEntries, attrKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
 		if attrKey != "" && attrBase != "" {
-			if strings.EqualFold(cfgKey, attrKey) && strings.EqualFold(cfgBase, attrBase) {
+			if keyMatched && strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
 			continue
 		}
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
+		if attrKey != "" && keyMatched {
 			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
@@ -933,7 +933,7 @@ func (s *Service) resolveConfigClaudeKey(auth *coreauth.Auth) *config.ClaudeKey 
 	if attrKey != "" {
 		for i := range s.cfg.ClaudeKey {
 			entry := &s.cfg.ClaudeKey[i]
-			if strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+			if providerEntryContainsAPIKey(entry.APIKey, entry.APIKeyEntries, attrKey) {
 				return entry
 			}
 		}
@@ -1012,9 +1012,9 @@ func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
 	}
 	for i := range s.cfg.CodexKey {
 		entry := &s.cfg.CodexKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
+		keyMatched := providerEntryContainsAPIKey(entry.APIKey, entry.APIKeyEntries, attrKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
+		if attrKey != "" && keyMatched {
 			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
@@ -1024,7 +1024,34 @@ func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
 			return entry
 		}
 	}
+	if attrKey != "" {
+		for i := range s.cfg.CodexKey {
+			entry := &s.cfg.CodexKey[i]
+			if providerEntryContainsAPIKey(entry.APIKey, entry.APIKeyEntries, attrKey) {
+				return entry
+			}
+		}
+	}
 	return nil
+}
+
+func providerEntryContainsAPIKey(legacyKey string, apiKeyEntries []string, targetKey string) bool {
+	target := strings.TrimSpace(targetKey)
+	if target == "" {
+		return false
+	}
+
+	if strings.EqualFold(strings.TrimSpace(legacyKey), target) {
+		return true
+	}
+
+	for i := range apiKeyEntries {
+		if strings.EqualFold(strings.TrimSpace(apiKeyEntries[i]), target) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Service) oauthExcludedModels(provider, authKind string) []string {

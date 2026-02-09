@@ -256,10 +256,16 @@ func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int, int) {
 		vertexCompatAPIKeyCount += len(cfg.VertexCompatAPIKey)
 	}
 	if len(cfg.ClaudeKey) > 0 {
-		claudeAPIKeyCount += len(cfg.ClaudeKey)
+		for i := range cfg.ClaudeKey {
+			keys := providerAPIKeys(cfg.ClaudeKey[i].APIKey, cfg.ClaudeKey[i].APIKeyEntries)
+			claudeAPIKeyCount += len(keys)
+		}
 	}
 	if len(cfg.CodexKey) > 0 {
-		codexAPIKeyCount += len(cfg.CodexKey)
+		for i := range cfg.CodexKey {
+			keys := providerAPIKeys(cfg.CodexKey[i].APIKey, cfg.CodexKey[i].APIKeyEntries)
+			codexAPIKeyCount += len(keys)
+		}
 	}
 	if len(cfg.OpenAICompatibility) > 0 {
 		for _, compatConfig := range cfg.OpenAICompatibility {
@@ -267,6 +273,34 @@ func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int, int) {
 		}
 	}
 	return geminiAPIKeyCount, vertexCompatAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
+}
+
+func providerAPIKeys(legacyKey string, entries []string) []string {
+	normalized := make([]string, 0, len(entries)+1)
+	seen := make(map[string]struct{}, len(entries)+1)
+
+	for i := range entries {
+		trimmed := strings.TrimSpace(entries[i])
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+
+	if len(normalized) > 0 {
+		return normalized
+	}
+
+	trimmedLegacy := strings.TrimSpace(legacyKey)
+	if trimmedLegacy == "" {
+		return nil
+	}
+
+	return []string{trimmedLegacy}
 }
 
 func (w *Watcher) persistConfigAsync() {

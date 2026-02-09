@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -770,19 +771,13 @@ func (cfg *Config) SanitizeOpenAICompatibility() {
 }
 
 // SanitizeCodexKeys migrates old format to new format and normalizes Codex configurations.
-// It automatically merges entries with the same base-url, proxy-url, and prefix.
+// It merges entries by provider name (case-insensitive).
 func (cfg *Config) SanitizeCodexKeys() {
 	if cfg == nil || len(cfg.CodexKey) == 0 {
 		return
 	}
 
-	// Group key for merging configurations
-	type groupKey struct {
-		baseURL  string
-		proxyURL string
-		prefix   string
-	}
-	groups := make(map[groupKey]*CodexKey)
+	groups := make(map[string]*CodexKey)
 
 	for i := range cfg.CodexKey {
 		entry := cfg.CodexKey[i]
@@ -800,15 +795,15 @@ func (cfg *Config) SanitizeCodexKeys() {
 		if entry.APIKey != "" && len(entry.APIKeyEntries) == 0 {
 			entry.APIKeyEntries = []string{strings.TrimSpace(entry.APIKey)}
 			entry.APIKey = ""
+		}
 
-			// Generate name if missing
-			if entry.Name == "" {
-				baseURL := entry.BaseURL
-				if baseURL == "" {
-					baseURL = "default"
-				}
-				entry.Name = "codex-" + sanitizeNameFromURL(baseURL)
+		// Generate name if missing
+		if entry.Name == "" {
+			baseURL := entry.BaseURL
+			if baseURL == "" {
+				baseURL = "default"
 			}
+			entry.Name = "codex-" + sanitizeNameFromURL(baseURL)
 		}
 
 		// Skip invalid entries
@@ -816,35 +811,13 @@ func (cfg *Config) SanitizeCodexKeys() {
 			continue
 		}
 
-		// Group key for merging
-		key := groupKey{
-			baseURL:  strings.ToLower(entry.BaseURL),
-			proxyURL: strings.ToLower(entry.ProxyURL),
-			prefix:   strings.ToLower(entry.Prefix),
-		}
+		// Group key for merging (name-based)
+		key := strings.ToLower(strings.TrimSpace(entry.Name))
 
 		// Merge with existing group or create new
 		if existing, ok := groups[key]; ok {
-			// Merge API keys (deduplicate)
-			keySet := make(map[string]struct{})
-			for _, k := range existing.APIKeyEntries {
-				trimmed := strings.TrimSpace(k)
-				if trimmed != "" {
-					keySet[trimmed] = struct{}{}
-				}
-			}
-			for _, k := range entry.APIKeyEntries {
-				trimmed := strings.TrimSpace(k)
-				if trimmed != "" {
-					keySet[trimmed] = struct{}{}
-				}
-			}
-
-			// Update API key list
-			existing.APIKeyEntries = make([]string, 0, len(keySet))
-			for k := range keySet {
-				existing.APIKeyEntries = append(existing.APIKeyEntries, k)
-			}
+			// Merge API keys (deduplicate and keep deterministic order)
+			existing.APIKeyEntries = normalizeAPIKeyEntries(append(existing.APIKeyEntries, entry.APIKeyEntries...))
 
 			// Merge models if needed
 			if len(entry.Models) > 0 && len(existing.Models) == 0 {
@@ -855,6 +828,9 @@ func (cfg *Config) SanitizeCodexKeys() {
 			if len(entry.Headers) > 0 && len(existing.Headers) == 0 {
 				existing.Headers = entry.Headers
 			}
+
+			// Merge excluded models (union, deduplicate)
+			existing.ExcludedModels = mergeNormalizedExcludedModels(existing.ExcludedModels, entry.ExcludedModels)
 		} else {
 			// New group
 			groups[key] = &entry
@@ -862,27 +838,27 @@ func (cfg *Config) SanitizeCodexKeys() {
 	}
 
 	// Collect all groups
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	out := make([]CodexKey, 0, len(groups))
-	for _, group := range groups {
-		out = append(out, *group)
+	for _, key := range keys {
+		out = append(out, *groups[key])
 	}
 	cfg.CodexKey = out
 }
 
 // SanitizeClaudeKeys migrates old format to new format and normalizes Claude configurations.
-// It automatically merges entries with the same base-url, proxy-url, and prefix.
+// It merges entries by provider name (case-insensitive).
 func (cfg *Config) SanitizeClaudeKeys() {
 	if cfg == nil || len(cfg.ClaudeKey) == 0 {
 		return
 	}
 
-	// Group key for merging configurations
-	type groupKey struct {
-		baseURL  string
-		proxyURL string
-		prefix   string
-	}
-	groups := make(map[groupKey]*ClaudeKey)
+	groups := make(map[string]*ClaudeKey)
 
 	for i := range cfg.ClaudeKey {
 		entry := cfg.ClaudeKey[i]
@@ -900,15 +876,15 @@ func (cfg *Config) SanitizeClaudeKeys() {
 		if entry.APIKey != "" && len(entry.APIKeyEntries) == 0 {
 			entry.APIKeyEntries = []string{strings.TrimSpace(entry.APIKey)}
 			entry.APIKey = ""
+		}
 
-			// Generate name if missing
-			if entry.Name == "" {
-				baseURL := entry.BaseURL
-				if baseURL == "" {
-					baseURL = "default"
-				}
-				entry.Name = "claude-" + sanitizeNameFromURL(baseURL)
+		// Generate name if missing
+		if entry.Name == "" {
+			baseURL := entry.BaseURL
+			if baseURL == "" {
+				baseURL = "default"
 			}
+			entry.Name = "claude-" + sanitizeNameFromURL(baseURL)
 		}
 
 		// Skip invalid entries (base-url is optional for Claude)
@@ -916,35 +892,13 @@ func (cfg *Config) SanitizeClaudeKeys() {
 			continue
 		}
 
-		// Group key for merging
-		key := groupKey{
-			baseURL:  strings.ToLower(entry.BaseURL),
-			proxyURL: strings.ToLower(entry.ProxyURL),
-			prefix:   strings.ToLower(entry.Prefix),
-		}
+		// Group key for merging (name-based)
+		key := strings.ToLower(strings.TrimSpace(entry.Name))
 
 		// Merge with existing group or create new
 		if existing, ok := groups[key]; ok {
-			// Merge API keys (deduplicate)
-			keySet := make(map[string]struct{})
-			for _, k := range existing.APIKeyEntries {
-				trimmed := strings.TrimSpace(k)
-				if trimmed != "" {
-					keySet[trimmed] = struct{}{}
-				}
-			}
-			for _, k := range entry.APIKeyEntries {
-				trimmed := strings.TrimSpace(k)
-				if trimmed != "" {
-					keySet[trimmed] = struct{}{}
-				}
-			}
-
-			// Update API key list
-			existing.APIKeyEntries = make([]string, 0, len(keySet))
-			for k := range keySet {
-				existing.APIKeyEntries = append(existing.APIKeyEntries, k)
-			}
+			// Merge API keys (deduplicate and keep deterministic order)
+			existing.APIKeyEntries = normalizeAPIKeyEntries(append(existing.APIKeyEntries, entry.APIKeyEntries...))
 
 			// Merge models if needed
 			if len(entry.Models) > 0 && len(existing.Models) == 0 {
@@ -955,6 +909,9 @@ func (cfg *Config) SanitizeClaudeKeys() {
 			if len(entry.Headers) > 0 && len(existing.Headers) == 0 {
 				existing.Headers = entry.Headers
 			}
+
+			// Merge excluded models (union, deduplicate)
+			existing.ExcludedModels = mergeNormalizedExcludedModels(existing.ExcludedModels, entry.ExcludedModels)
 		} else {
 			// New group
 			groups[key] = &entry
@@ -962,9 +919,15 @@ func (cfg *Config) SanitizeClaudeKeys() {
 	}
 
 	// Collect all groups
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	out := make([]ClaudeKey, 0, len(groups))
-	for _, group := range groups {
-		out = append(out, *group)
+	for _, key := range keys {
+		out = append(out, *groups[key])
 	}
 	cfg.ClaudeKey = out
 }
@@ -990,6 +953,19 @@ func normalizeAPIKeyEntries(entries []string) []string {
 		return nil
 	}
 	return out
+}
+
+func mergeNormalizedExcludedModels(left, right []string) []string {
+	if len(left) == 0 {
+		return right
+	}
+	if len(right) == 0 {
+		return left
+	}
+	combined := make([]string, 0, len(left)+len(right))
+	combined = append(combined, left...)
+	combined = append(combined, right...)
+	return NormalizeExcludedModels(combined)
 }
 
 // SanitizeGeminiKeys deduplicates and normalizes Gemini credentials.

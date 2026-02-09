@@ -141,6 +141,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			if strings.TrimSpace(o.APIKey) != strings.TrimSpace(n.APIKey) {
 				changes = append(changes, fmt.Sprintf("claude[%d].api-key: updated", i))
 			}
+			if !reflect.DeepEqual(trimStrings(o.APIKeyEntries), trimStrings(n.APIKeyEntries)) {
+				changes = append(changes, fmt.Sprintf("claude[%d].api-key-entries: updated", i))
+			}
 			if !equalStringMap(o.Headers, n.Headers) {
 				changes = append(changes, fmt.Sprintf("claude[%d].headers: updated", i))
 			}
@@ -186,6 +189,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			}
 			if strings.TrimSpace(o.APIKey) != strings.TrimSpace(n.APIKey) {
 				changes = append(changes, fmt.Sprintf("codex[%d].api-key: updated", i))
+			}
+			if !reflect.DeepEqual(trimStrings(o.APIKeyEntries), trimStrings(n.APIKeyEntries)) {
+				changes = append(changes, fmt.Sprintf("codex[%d].api-key-entries: updated", i))
 			}
 			if !equalStringMap(o.Headers, n.Headers) {
 				changes = append(changes, fmt.Sprintf("codex[%d].headers: updated", i))

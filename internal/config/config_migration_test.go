@@ -3,8 +3,8 @@ package config
 import (
 	"testing"
 
-	"gopkg.in/yaml.v3"
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 )
 
 func TestCodexKeyMigration(t *testing.T) {
@@ -113,5 +113,102 @@ claude-api-key:
 		assert.Equal(t, "default-claude", cfg.ClaudeKey[0].Name)
 		assert.Equal(t, 1, len(cfg.ClaudeKey[0].APIKeyEntries))
 		assert.Equal(t, "sk-claude-key-1", cfg.ClaudeKey[0].APIKeyEntries[0])
+	}
+}
+
+func TestClaudeKeyMigrationMergesExcludedModelsAcrossMergedKeys(t *testing.T) {
+	yamlData := `
+claude-api-key:
+  - api-key: "sk-claude-key-1"
+    base-url: "https://api.anthropic.com"
+    excluded-models:
+      - "model-a"
+      - "model-b"
+  - api-key: "sk-claude-key-2"
+    base-url: "https://api.anthropic.com"
+    excluded-models:
+      - "model-b"
+      - "model-c"
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(yamlData), &cfg)
+	assert.NoError(t, err)
+
+	cfg.SanitizeClaudeKeys()
+
+	if assert.Equal(t, 1, len(cfg.ClaudeKey)) {
+		merged := cfg.ClaudeKey[0]
+		assert.Len(t, merged.APIKeyEntries, 2)
+		assert.ElementsMatch(t, []string{"model-a", "model-b", "model-c"}, merged.ExcludedModels)
+	}
+}
+
+func TestCodexKeyMigrationMergesExcludedModelsAcrossMergedKeys(t *testing.T) {
+	yamlData := `
+codex-api-key:
+  - api-key: "sk-codex-key-1"
+    base-url: "https://api.openai.com/v1"
+    excluded-models:
+      - "model-x"
+  - api-key: "sk-codex-key-2"
+    base-url: "https://api.openai.com/v1"
+    excluded-models:
+      - "model-y"
+      - "model-x"
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(yamlData), &cfg)
+	assert.NoError(t, err)
+
+	cfg.SanitizeCodexKeys()
+
+	if assert.Equal(t, 1, len(cfg.CodexKey)) {
+		merged := cfg.CodexKey[0]
+		assert.Len(t, merged.APIKeyEntries, 2)
+		assert.ElementsMatch(t, []string{"model-x", "model-y"}, merged.ExcludedModels)
+	}
+}
+
+func TestCodexKeyMigrationSameURLDifferentNameNotMerged(t *testing.T) {
+	yamlData := `
+codex-api-key:
+  - name: "provider-a"
+    api-key: "sk-codex-a"
+    base-url: "https://api.openai.com/v1"
+  - name: "provider-b"
+    api-key: "sk-codex-b"
+    base-url: "https://api.openai.com/v1"
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(yamlData), &cfg)
+	assert.NoError(t, err)
+
+	cfg.SanitizeCodexKeys()
+
+	if assert.Equal(t, 2, len(cfg.CodexKey)) {
+		names := []string{cfg.CodexKey[0].Name, cfg.CodexKey[1].Name}
+		assert.ElementsMatch(t, []string{"provider-a", "provider-b"}, names)
+	}
+}
+
+func TestClaudeKeyMigrationSameURLDifferentNameNotMerged(t *testing.T) {
+	yamlData := `
+claude-api-key:
+  - name: "provider-a"
+    api-key: "sk-claude-a"
+    base-url: "https://api.anthropic.com"
+  - name: "provider-b"
+    api-key: "sk-claude-b"
+    base-url: "https://api.anthropic.com"
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(yamlData), &cfg)
+	assert.NoError(t, err)
+
+	cfg.SanitizeClaudeKeys()
+
+	if assert.Equal(t, 2, len(cfg.ClaudeKey)) {
+		names := []string{cfg.ClaudeKey[0].Name, cfg.ClaudeKey[1].Name}
+		assert.ElementsMatch(t, []string{"provider-a", "provider-b"}, names)
 	}
 }

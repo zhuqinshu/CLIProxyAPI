@@ -104,6 +104,51 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 	c.JSON(400, gin.H{"error": "missing index or value"})
 }
 
+func containsProviderAPIKey(legacyKey string, apiKeyEntries []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+
+	if strings.EqualFold(strings.TrimSpace(legacyKey), target) {
+		return true
+	}
+
+	for i := range apiKeyEntries {
+		if strings.EqualFold(strings.TrimSpace(apiKeyEntries[i]), target) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeProviderAPIKeyEntries(entries []string) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for i := range entries {
+		trimmed := strings.TrimSpace(entries[i])
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+
+	if len(normalized) == 0 {
+		return nil
+	}
+
+	return normalized
+}
+
 // api-keys
 func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
 func (h *Handler) PutAPIKeys(c *gin.Context) {
@@ -273,6 +318,7 @@ func (h *Handler) PutClaudeKeys(c *gin.Context) {
 func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	type claudeKeyPatch struct {
 		APIKey         *string               `json:"api-key"`
+		APIKeyEntries  *[]string             `json:"api-key-entries"`
 		Prefix         *string               `json:"prefix"`
 		BaseURL        *string               `json:"base-url"`
 		ProxyURL       *string               `json:"proxy-url"`
@@ -296,7 +342,7 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	if targetIndex == -1 && body.Match != nil {
 		match := strings.TrimSpace(*body.Match)
 		for i := range h.cfg.ClaudeKey {
-			if h.cfg.ClaudeKey[i].APIKey == match {
+			if containsProviderAPIKey(h.cfg.ClaudeKey[i].APIKey, h.cfg.ClaudeKey[i].APIKeyEntries, match) {
 				targetIndex = i
 				break
 			}
@@ -309,7 +355,12 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 
 	entry := h.cfg.ClaudeKey[targetIndex]
 	if body.Value.APIKey != nil {
-		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
+		entry.APIKeyEntries = normalizeProviderAPIKeyEntries([]string{strings.TrimSpace(*body.Value.APIKey)})
+		entry.APIKey = ""
+	}
+	if body.Value.APIKeyEntries != nil {
+		entry.APIKeyEntries = normalizeProviderAPIKeyEntries(*body.Value.APIKeyEntries)
+		entry.APIKey = ""
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
@@ -336,10 +387,10 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 }
 
 func (h *Handler) DeleteClaudeKey(c *gin.Context) {
-	if val := c.Query("api-key"); val != "" {
+	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		out := make([]config.ClaudeKey, 0, len(h.cfg.ClaudeKey))
 		for _, v := range h.cfg.ClaudeKey {
-			if v.APIKey != val {
+			if !containsProviderAPIKey(v.APIKey, v.APIKeyEntries, val) {
 				out = append(out, v)
 			}
 		}
@@ -838,6 +889,7 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 func (h *Handler) PatchCodexKey(c *gin.Context) {
 	type codexKeyPatch struct {
 		APIKey         *string              `json:"api-key"`
+		APIKeyEntries  *[]string            `json:"api-key-entries"`
 		Prefix         *string              `json:"prefix"`
 		BaseURL        *string              `json:"base-url"`
 		ProxyURL       *string              `json:"proxy-url"`
@@ -861,7 +913,7 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	if targetIndex == -1 && body.Match != nil {
 		match := strings.TrimSpace(*body.Match)
 		for i := range h.cfg.CodexKey {
-			if h.cfg.CodexKey[i].APIKey == match {
+			if containsProviderAPIKey(h.cfg.CodexKey[i].APIKey, h.cfg.CodexKey[i].APIKeyEntries, match) {
 				targetIndex = i
 				break
 			}
@@ -874,7 +926,12 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 
 	entry := h.cfg.CodexKey[targetIndex]
 	if body.Value.APIKey != nil {
-		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
+		entry.APIKeyEntries = normalizeProviderAPIKeyEntries([]string{strings.TrimSpace(*body.Value.APIKey)})
+		entry.APIKey = ""
+	}
+	if body.Value.APIKeyEntries != nil {
+		entry.APIKeyEntries = normalizeProviderAPIKeyEntries(*body.Value.APIKeyEntries)
+		entry.APIKey = ""
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
@@ -908,10 +965,10 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 }
 
 func (h *Handler) DeleteCodexKey(c *gin.Context) {
-	if val := c.Query("api-key"); val != "" {
+	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		out := make([]config.CodexKey, 0, len(h.cfg.CodexKey))
 		for _, v := range h.cfg.CodexKey {
-			if v.APIKey != val {
+			if !containsProviderAPIKey(v.APIKey, v.APIKeyEntries, val) {
 				out = append(out, v)
 			}
 		}
@@ -971,22 +1028,7 @@ func normalizeClaudeKey(entry *config.ClaudeKey) {
 		return
 	}
 	entry.APIKey = strings.TrimSpace(entry.APIKey)
-	if len(entry.APIKeyEntries) > 0 {
-		normalized := make([]string, 0, len(entry.APIKeyEntries))
-		seen := make(map[string]struct{}, len(entry.APIKeyEntries))
-		for i := range entry.APIKeyEntries {
-			trimmed := strings.TrimSpace(entry.APIKeyEntries[i])
-			if trimmed == "" {
-				continue
-			}
-			if _, ok := seen[trimmed]; ok {
-				continue
-			}
-			seen[trimmed] = struct{}{}
-			normalized = append(normalized, trimmed)
-		}
-		entry.APIKeyEntries = normalized
-	}
+	entry.APIKeyEntries = normalizeProviderAPIKeyEntries(entry.APIKeyEntries)
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
@@ -1012,22 +1054,7 @@ func normalizeCodexKey(entry *config.CodexKey) {
 		return
 	}
 	entry.APIKey = strings.TrimSpace(entry.APIKey)
-	if len(entry.APIKeyEntries) > 0 {
-		normalized := make([]string, 0, len(entry.APIKeyEntries))
-		seen := make(map[string]struct{}, len(entry.APIKeyEntries))
-		for i := range entry.APIKeyEntries {
-			trimmed := strings.TrimSpace(entry.APIKeyEntries[i])
-			if trimmed == "" {
-				continue
-			}
-			if _, ok := seen[trimmed]; ok {
-				continue
-			}
-			seen[trimmed] = struct{}{}
-			normalized = append(normalized, trimmed)
-		}
-		entry.APIKeyEntries = normalized
-	}
+	entry.APIKeyEntries = normalizeProviderAPIKeyEntries(entry.APIKeyEntries)
 	entry.Prefix = strings.TrimSpace(entry.Prefix)
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)

@@ -868,6 +868,34 @@ type APIKeyConfigEntry interface {
 	GetBaseURL() string
 }
 
+func apiKeyConfigContainsAPIKey[T APIKeyConfigEntry](entry T, targetKey string) bool {
+	target := strings.TrimSpace(targetKey)
+	if target == "" {
+		return false
+	}
+
+	if strings.EqualFold(strings.TrimSpace(entry.GetAPIKey()), target) {
+		return true
+	}
+
+	switch typed := any(entry).(type) {
+	case internalconfig.ClaudeKey:
+		for i := range typed.APIKeyEntries {
+			if strings.EqualFold(strings.TrimSpace(typed.APIKeyEntries[i]), target) {
+				return true
+			}
+		}
+	case internalconfig.CodexKey:
+		for i := range typed.APIKeyEntries {
+			if strings.EqualFold(strings.TrimSpace(typed.APIKeyEntries[i]), target) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func resolveAPIKeyConfig[T APIKeyConfigEntry](entries []T, auth *Auth) *T {
 	if auth == nil || len(entries) == 0 {
 		return nil
@@ -879,16 +907,16 @@ func resolveAPIKeyConfig[T APIKeyConfigEntry](entries []T, auth *Auth) *T {
 	}
 	for i := range entries {
 		entry := &entries[i]
-		cfgKey := strings.TrimSpace((*entry).GetAPIKey())
 		cfgBase := strings.TrimSpace((*entry).GetBaseURL())
+		keyMatched := apiKeyConfigContainsAPIKey(*entry, attrKey)
 		if attrKey != "" && attrBase != "" {
-			if strings.EqualFold(cfgKey, attrKey) && strings.EqualFold(cfgBase, attrBase) {
+			if keyMatched && strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
 			continue
 		}
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
-			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
+		if attrKey != "" && keyMatched {
+			if cfgBase == "" || attrBase == "" || strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
 		}
@@ -899,7 +927,7 @@ func resolveAPIKeyConfig[T APIKeyConfigEntry](entries []T, auth *Auth) *T {
 	if attrKey != "" {
 		for i := range entries {
 			entry := &entries[i]
-			if strings.EqualFold(strings.TrimSpace((*entry).GetAPIKey()), attrKey) {
+			if apiKeyConfigContainsAPIKey(*entry, attrKey) {
 				return entry
 			}
 		}
