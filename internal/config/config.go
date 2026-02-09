@@ -290,30 +290,34 @@ type CloakConfig struct {
 	SensitiveWords []string `yaml:"sensitive-words,omitempty" json:"sensitive-words,omitempty"`
 }
 
-// ClaudeKey represents the configuration for a Claude API key,
-// including the API key itself and an optional base URL for the API endpoint.
+// ClaudeKey represents the configuration for a Claude provider,
+// supporting multiple API keys for load balancing and failover.
 type ClaudeKey struct {
-	// APIKey is the authentication key for accessing Claude API services.
-	APIKey string `yaml:"api-key" json:"api-key"`
+	// Name is the identifier for this Claude provider configuration.
+	Name string `yaml:"name" json:"name"`
 
-	// Priority controls selection preference when multiple credentials match.
+	// Priority controls selection preference when multiple providers or credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
-	// Prefix optionally namespaces models for this credential (e.g., "teamA/claude-sonnet-4").
+	// Prefix optionally namespaces models for this provider (e.g., "teamA/claude-sonnet-4").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 
 	// BaseURL is the base URL for the Claude API endpoint.
 	// If empty, the default Claude API URL will be used.
 	BaseURL string `yaml:"base-url" json:"base-url"`
 
-	// ProxyURL overrides the global proxy setting for this API key if provided.
-	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
+	// ProxyURL overrides the global proxy setting for ALL keys in this provider.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// APIKeyEntries defines multiple API keys for this provider.
+	// All keys share the same base-url, proxy-url, and other provider-level settings.
+	APIKeyEntries []string `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
 	// Models defines upstream model names and aliases for request routing.
-	Models []ClaudeModel `yaml:"models" json:"models"`
+	Models []ClaudeModel `yaml:"models,omitempty" json:"models,omitempty"`
 
-	// Headers optionally adds extra HTTP headers for requests sent with this key.
+	// Headers optionally adds extra HTTP headers for requests sent to this provider.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
@@ -321,6 +325,11 @@ type ClaudeKey struct {
 
 	// Cloak configures request cloaking for non-Claude-Code clients.
 	Cloak *CloakConfig `yaml:"cloak,omitempty" json:"cloak,omitempty"`
+
+	// ===== Deprecated fields for backward compatibility =====
+	// APIKey is deprecated, use APIKeyEntries instead.
+	// This field is only used during configuration migration.
+	APIKey string `yaml:"api-key,omitempty" json:"api-key,omitempty"`
 }
 
 func (k ClaudeKey) GetAPIKey() string  { return k.APIKey }
@@ -338,34 +347,43 @@ type ClaudeModel struct {
 func (m ClaudeModel) GetName() string  { return m.Name }
 func (m ClaudeModel) GetAlias() string { return m.Alias }
 
-// CodexKey represents the configuration for a Codex API key,
-// including the API key itself and an optional base URL for the API endpoint.
+// CodexKey represents the configuration for a Codex provider,
+// supporting multiple API keys for load balancing and failover.
 type CodexKey struct {
-	// APIKey is the authentication key for accessing Codex API services.
-	APIKey string `yaml:"api-key" json:"api-key"`
+	// Name is the identifier for this Codex provider configuration.
+	Name string `yaml:"name" json:"name"`
 
-	// Priority controls selection preference when multiple credentials match.
+	// Priority controls selection preference when multiple providers or credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
-	// Prefix optionally namespaces models for this credential (e.g., "teamA/gpt-5-codex").
+	// Prefix optionally namespaces models for this provider (e.g., "teamA/gpt-5-codex").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 
 	// BaseURL is the base URL for the Codex API endpoint.
 	// If empty, the default Codex API URL will be used.
 	BaseURL string `yaml:"base-url" json:"base-url"`
 
-	// ProxyURL overrides the global proxy setting for this API key if provided.
-	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
+	// ProxyURL overrides the global proxy setting for ALL keys in this provider.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// APIKeyEntries defines multiple API keys for this provider.
+	// All keys share the same base-url, proxy-url, and other provider-level settings.
+	APIKeyEntries []string `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
 	// Models defines upstream model names and aliases for request routing.
-	Models []CodexModel `yaml:"models" json:"models"`
+	Models []CodexModel `yaml:"models,omitempty" json:"models,omitempty"`
 
-	// Headers optionally adds extra HTTP headers for requests sent with this key.
+	// Headers optionally adds extra HTTP headers for requests sent to this provider.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// ===== Deprecated fields for backward compatibility =====
+	// APIKey is deprecated, use APIKeyEntries instead.
+	// This field is only used during configuration migration.
+	APIKey string `yaml:"api-key,omitempty" json:"api-key,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
@@ -751,38 +769,227 @@ func (cfg *Config) SanitizeOpenAICompatibility() {
 	cfg.OpenAICompatibility = out
 }
 
-// SanitizeCodexKeys removes Codex API key entries missing a BaseURL.
-// It trims whitespace and preserves order for remaining entries.
+// SanitizeCodexKeys migrates old format to new format and normalizes Codex configurations.
+// It automatically merges entries with the same base-url, proxy-url, and prefix.
 func (cfg *Config) SanitizeCodexKeys() {
 	if cfg == nil || len(cfg.CodexKey) == 0 {
 		return
 	}
-	out := make([]CodexKey, 0, len(cfg.CodexKey))
+
+	// Group key for merging configurations
+	type groupKey struct {
+		baseURL  string
+		proxyURL string
+		prefix   string
+	}
+	groups := make(map[groupKey]*CodexKey)
+
 	for i := range cfg.CodexKey {
-		e := cfg.CodexKey[i]
-		e.Prefix = normalizeModelPrefix(e.Prefix)
-		e.BaseURL = strings.TrimSpace(e.BaseURL)
-		e.Headers = NormalizeHeaders(e.Headers)
-		e.ExcludedModels = NormalizeExcludedModels(e.ExcludedModels)
-		if e.BaseURL == "" {
+		entry := cfg.CodexKey[i]
+
+		// Normalize fields
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.Headers = NormalizeHeaders(entry.Headers)
+		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		entry.APIKeyEntries = normalizeAPIKeyEntries(entry.APIKeyEntries)
+
+		// Migrate old format: api-key → api-key-entries
+		if entry.APIKey != "" && len(entry.APIKeyEntries) == 0 {
+			entry.APIKeyEntries = []string{strings.TrimSpace(entry.APIKey)}
+			entry.APIKey = ""
+
+			// Generate name if missing
+			if entry.Name == "" {
+				baseURL := entry.BaseURL
+				if baseURL == "" {
+					baseURL = "default"
+				}
+				entry.Name = "codex-" + sanitizeNameFromURL(baseURL)
+			}
+		}
+
+		// Skip invalid entries
+		if entry.BaseURL == "" || len(entry.APIKeyEntries) == 0 {
 			continue
 		}
-		out = append(out, e)
+
+		// Group key for merging
+		key := groupKey{
+			baseURL:  strings.ToLower(entry.BaseURL),
+			proxyURL: strings.ToLower(entry.ProxyURL),
+			prefix:   strings.ToLower(entry.Prefix),
+		}
+
+		// Merge with existing group or create new
+		if existing, ok := groups[key]; ok {
+			// Merge API keys (deduplicate)
+			keySet := make(map[string]struct{})
+			for _, k := range existing.APIKeyEntries {
+				trimmed := strings.TrimSpace(k)
+				if trimmed != "" {
+					keySet[trimmed] = struct{}{}
+				}
+			}
+			for _, k := range entry.APIKeyEntries {
+				trimmed := strings.TrimSpace(k)
+				if trimmed != "" {
+					keySet[trimmed] = struct{}{}
+				}
+			}
+
+			// Update API key list
+			existing.APIKeyEntries = make([]string, 0, len(keySet))
+			for k := range keySet {
+				existing.APIKeyEntries = append(existing.APIKeyEntries, k)
+			}
+
+			// Merge models if needed
+			if len(entry.Models) > 0 && len(existing.Models) == 0 {
+				existing.Models = entry.Models
+			}
+
+			// Merge headers if needed
+			if len(entry.Headers) > 0 && len(existing.Headers) == 0 {
+				existing.Headers = entry.Headers
+			}
+		} else {
+			// New group
+			groups[key] = &entry
+		}
+	}
+
+	// Collect all groups
+	out := make([]CodexKey, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, *group)
 	}
 	cfg.CodexKey = out
 }
 
-// SanitizeClaudeKeys normalizes headers for Claude credentials.
+// SanitizeClaudeKeys migrates old format to new format and normalizes Claude configurations.
+// It automatically merges entries with the same base-url, proxy-url, and prefix.
 func (cfg *Config) SanitizeClaudeKeys() {
 	if cfg == nil || len(cfg.ClaudeKey) == 0 {
 		return
 	}
+
+	// Group key for merging configurations
+	type groupKey struct {
+		baseURL  string
+		proxyURL string
+		prefix   string
+	}
+	groups := make(map[groupKey]*ClaudeKey)
+
 	for i := range cfg.ClaudeKey {
-		entry := &cfg.ClaudeKey[i]
+		entry := cfg.ClaudeKey[i]
+
+		// Normalize fields
+		entry.Name = strings.TrimSpace(entry.Name)
 		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		entry.APIKeyEntries = normalizeAPIKeyEntries(entry.APIKeyEntries)
+
+		// Migrate old format: api-key → api-key-entries
+		if entry.APIKey != "" && len(entry.APIKeyEntries) == 0 {
+			entry.APIKeyEntries = []string{strings.TrimSpace(entry.APIKey)}
+			entry.APIKey = ""
+
+			// Generate name if missing
+			if entry.Name == "" {
+				baseURL := entry.BaseURL
+				if baseURL == "" {
+					baseURL = "default"
+				}
+				entry.Name = "claude-" + sanitizeNameFromURL(baseURL)
+			}
+		}
+
+		// Skip invalid entries (base-url is optional for Claude)
+		if len(entry.APIKeyEntries) == 0 {
+			continue
+		}
+
+		// Group key for merging
+		key := groupKey{
+			baseURL:  strings.ToLower(entry.BaseURL),
+			proxyURL: strings.ToLower(entry.ProxyURL),
+			prefix:   strings.ToLower(entry.Prefix),
+		}
+
+		// Merge with existing group or create new
+		if existing, ok := groups[key]; ok {
+			// Merge API keys (deduplicate)
+			keySet := make(map[string]struct{})
+			for _, k := range existing.APIKeyEntries {
+				trimmed := strings.TrimSpace(k)
+				if trimmed != "" {
+					keySet[trimmed] = struct{}{}
+				}
+			}
+			for _, k := range entry.APIKeyEntries {
+				trimmed := strings.TrimSpace(k)
+				if trimmed != "" {
+					keySet[trimmed] = struct{}{}
+				}
+			}
+
+			// Update API key list
+			existing.APIKeyEntries = make([]string, 0, len(keySet))
+			for k := range keySet {
+				existing.APIKeyEntries = append(existing.APIKeyEntries, k)
+			}
+
+			// Merge models if needed
+			if len(entry.Models) > 0 && len(existing.Models) == 0 {
+				existing.Models = entry.Models
+			}
+
+			// Merge headers if needed
+			if len(entry.Headers) > 0 && len(existing.Headers) == 0 {
+				existing.Headers = entry.Headers
+			}
+		} else {
+			// New group
+			groups[key] = &entry
+		}
 	}
+
+	// Collect all groups
+	out := make([]ClaudeKey, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, *group)
+	}
+	cfg.ClaudeKey = out
+}
+
+func normalizeAPIKeyEntries(entries []string) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(entries))
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SanitizeGeminiKeys deduplicates and normalizes Gemini credentials.
@@ -823,6 +1030,24 @@ func normalizeModelPrefix(prefix string) string {
 		return ""
 	}
 	return trimmed
+}
+
+// sanitizeNameFromURL extracts a suitable name from a URL.
+func sanitizeNameFromURL(url string) string {
+	// Remove protocol
+	name := strings.TrimPrefix(url, "https://")
+	name = strings.TrimPrefix(name, "http://")
+	// Remove path
+	if idx := strings.Index(name, "/"); idx > 0 {
+		name = name[:idx]
+	}
+	// Remove port
+	if idx := strings.Index(name, ":"); idx > 0 {
+		name = name[:idx]
+	}
+	// Replace special characters
+	name = strings.ReplaceAll(name, ".", "-")
+	return name
 }
 
 func syncInlineAccessProvider(cfg *Config) {

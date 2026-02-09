@@ -96,41 +96,43 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 	out := make([]*coreauth.Auth, 0, len(cfg.ClaudeKey))
 	for i := range cfg.ClaudeKey {
 		ck := cfg.ClaudeKey[i]
-		key := strings.TrimSpace(ck.APIKey)
-		if key == "" {
+		keys := providerAPIKeys(ck.APIKey, ck.APIKeyEntries)
+		if len(keys) == 0 {
 			continue
 		}
 		prefix := strings.TrimSpace(ck.Prefix)
 		base := strings.TrimSpace(ck.BaseURL)
-		id, token := idGen.Next("claude:apikey", key, base)
-		attrs := map[string]string{
-			"source":  fmt.Sprintf("config:claude[%s]", token),
-			"api_key": key,
+		for _, key := range keys {
+			id, token := idGen.Next("claude:apikey", key, base)
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:claude[%s]", token),
+				"api_key": key,
+			}
+			if ck.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(ck.Priority)
+			}
+			if base != "" {
+				attrs["base_url"] = base
+			}
+			if hash := diff.ComputeClaudeModelsHash(ck.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(ck.Headers, attrs)
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   "claude",
+				Label:      "claude-apikey",
+				Prefix:     prefix,
+				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
+			out = append(out, a)
 		}
-		if ck.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(ck.Priority)
-		}
-		if base != "" {
-			attrs["base_url"] = base
-		}
-		if hash := diff.ComputeClaudeModelsHash(ck.Models); hash != "" {
-			attrs["models_hash"] = hash
-		}
-		addConfigHeadersToAttrs(ck.Headers, attrs)
-		proxyURL := strings.TrimSpace(ck.ProxyURL)
-		a := &coreauth.Auth{
-			ID:         id,
-			Provider:   "claude",
-			Label:      "claude-apikey",
-			Prefix:     prefix,
-			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
-			Attributes: attrs,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
-		out = append(out, a)
 	}
 	return out
 }
@@ -144,42 +146,70 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 	out := make([]*coreauth.Auth, 0, len(cfg.CodexKey))
 	for i := range cfg.CodexKey {
 		ck := cfg.CodexKey[i]
-		key := strings.TrimSpace(ck.APIKey)
-		if key == "" {
+		keys := providerAPIKeys(ck.APIKey, ck.APIKeyEntries)
+		if len(keys) == 0 {
 			continue
 		}
 		prefix := strings.TrimSpace(ck.Prefix)
-		id, token := idGen.Next("codex:apikey", key, ck.BaseURL)
-		attrs := map[string]string{
-			"source":  fmt.Sprintf("config:codex[%s]", token),
-			"api_key": key,
+		for _, key := range keys {
+			id, token := idGen.Next("codex:apikey", key, ck.BaseURL)
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:codex[%s]", token),
+				"api_key": key,
+			}
+			if ck.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(ck.Priority)
+			}
+			if ck.BaseURL != "" {
+				attrs["base_url"] = ck.BaseURL
+			}
+			if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(ck.Headers, attrs)
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   "codex",
+				Label:      "codex-apikey",
+				Prefix:     prefix,
+				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
+			out = append(out, a)
 		}
-		if ck.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(ck.Priority)
-		}
-		if ck.BaseURL != "" {
-			attrs["base_url"] = ck.BaseURL
-		}
-		if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
-			attrs["models_hash"] = hash
-		}
-		addConfigHeadersToAttrs(ck.Headers, attrs)
-		proxyURL := strings.TrimSpace(ck.ProxyURL)
-		a := &coreauth.Auth{
-			ID:         id,
-			Provider:   "codex",
-			Label:      "codex-apikey",
-			Prefix:     prefix,
-			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
-			Attributes: attrs,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
-		out = append(out, a)
 	}
 	return out
+}
+
+func providerAPIKeys(legacyKey string, entries []string) []string {
+	keys := make([]string, 0, len(entries)+1)
+	seen := make(map[string]struct{}, len(entries)+1)
+
+	for i := range entries {
+		key := strings.TrimSpace(entries[i])
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	key := strings.TrimSpace(legacyKey)
+	if key != "" {
+		if _, ok := seen[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+
+	return keys
 }
 
 // synthesizeOpenAICompat creates Auth entries for OpenAI-compatible providers.

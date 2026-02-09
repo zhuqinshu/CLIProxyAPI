@@ -261,6 +261,78 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 	}
 }
 
+func TestConfigSynthesizer_CodexKeys_APIKeyEntries(t *testing.T) {
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			CodexKey: []config.CodexKey{
+				{
+					Name:          "provider-a",
+					Prefix:        "dev",
+					BaseURL:       "https://api.openai.com",
+					ProxyURL:      "http://proxy.local",
+					APIKeyEntries: []string{"key-1", " key-2 ", "key-1", ""},
+				},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 2 {
+		t.Fatalf("expected 2 auths, got %d", len(auths))
+	}
+
+	got := map[string]bool{}
+	for i := range auths {
+		got[auths[i].Attributes["api_key"]] = true
+		if auths[i].ProxyURL != "http://proxy.local" {
+			t.Errorf("expected proxy_url http://proxy.local, got %s", auths[i].ProxyURL)
+		}
+	}
+	if !got["key-1"] || !got["key-2"] {
+		t.Fatalf("expected keys key-1 and key-2, got %#v", got)
+	}
+}
+
+func TestConfigSynthesizer_ClaudeKeys_APIKeyEntries(t *testing.T) {
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			ClaudeKey: []config.ClaudeKey{
+				{
+					Name:          "provider-a",
+					Prefix:        "main",
+					BaseURL:       "https://api.anthropic.com",
+					APIKeyEntries: []string{"sk-1", " sk-2 ", "sk-1", ""},
+				},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 2 {
+		t.Fatalf("expected 2 auths, got %d", len(auths))
+	}
+
+	got := map[string]bool{}
+	for i := range auths {
+		got[auths[i].Attributes["api_key"]] = true
+	}
+	if !got["sk-1"] || !got["sk-2"] {
+		t.Fatalf("expected keys sk-1 and sk-2, got %#v", got)
+	}
+}
+
 func TestConfigSynthesizer_CodexKeys_SkipsEmptyAndHeaders(t *testing.T) {
 	synth := NewConfigSynthesizer()
 	ctx := &SynthesisContext{

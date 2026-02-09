@@ -971,6 +971,22 @@ func normalizeClaudeKey(entry *config.ClaudeKey) {
 		return
 	}
 	entry.APIKey = strings.TrimSpace(entry.APIKey)
+	if len(entry.APIKeyEntries) > 0 {
+		normalized := make([]string, 0, len(entry.APIKeyEntries))
+		seen := make(map[string]struct{}, len(entry.APIKeyEntries))
+		for i := range entry.APIKeyEntries {
+			trimmed := strings.TrimSpace(entry.APIKeyEntries[i])
+			if trimmed == "" {
+				continue
+			}
+			if _, ok := seen[trimmed]; ok {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			normalized = append(normalized, trimmed)
+		}
+		entry.APIKeyEntries = normalized
+	}
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
@@ -996,6 +1012,22 @@ func normalizeCodexKey(entry *config.CodexKey) {
 		return
 	}
 	entry.APIKey = strings.TrimSpace(entry.APIKey)
+	if len(entry.APIKeyEntries) > 0 {
+		normalized := make([]string, 0, len(entry.APIKeyEntries))
+		seen := make(map[string]struct{}, len(entry.APIKeyEntries))
+		for i := range entry.APIKeyEntries {
+			trimmed := strings.TrimSpace(entry.APIKeyEntries[i])
+			if trimmed == "" {
+				continue
+			}
+			if _, ok := seen[trimmed]; ok {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			normalized = append(normalized, trimmed)
+		}
+		entry.APIKeyEntries = normalized
+	}
 	entry.Prefix = strings.TrimSpace(entry.Prefix)
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)

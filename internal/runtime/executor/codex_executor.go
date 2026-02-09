@@ -702,15 +702,15 @@ func (e *CodexExecutor) resolveCodexConfig(auth *cliproxyauth.Auth) *config.Code
 	}
 	for i := range e.cfg.CodexKey {
 		entry := &e.cfg.CodexKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
+		entryKeys := codexConfigKeys(entry)
 		if attrKey != "" && attrBase != "" {
-			if strings.EqualFold(cfgKey, attrKey) && strings.EqualFold(cfgBase, attrBase) {
+			if codexHasKey(entryKeys, attrKey) && strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
 			continue
 		}
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
+		if attrKey != "" && codexHasKey(entryKeys, attrKey) {
 			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
 				return entry
 			}
@@ -722,10 +722,36 @@ func (e *CodexExecutor) resolveCodexConfig(auth *cliproxyauth.Auth) *config.Code
 	if attrKey != "" {
 		for i := range e.cfg.CodexKey {
 			entry := &e.cfg.CodexKey[i]
-			if strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+			if codexHasKey(codexConfigKeys(entry), attrKey) {
 				return entry
 			}
 		}
 	}
 	return nil
+}
+
+func codexConfigKeys(entry *config.CodexKey) []string {
+	if entry == nil {
+		return nil
+	}
+	if len(entry.APIKeyEntries) > 0 {
+		return entry.APIKeyEntries
+	}
+	if strings.TrimSpace(entry.APIKey) == "" {
+		return nil
+	}
+	return []string{entry.APIKey}
+}
+
+func codexHasKey(keys []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for i := range keys {
+		if strings.EqualFold(strings.TrimSpace(keys[i]), target) {
+			return true
+		}
+	}
+	return false
 }

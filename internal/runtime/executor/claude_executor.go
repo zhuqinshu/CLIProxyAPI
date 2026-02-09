@@ -899,11 +899,11 @@ func resolveClaudeKeyCloakConfig(cfg *config.Config, auth *cliproxyauth.Auth) *c
 
 	for i := range cfg.ClaudeKey {
 		entry := &cfg.ClaudeKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
+		entryKeys := claudeConfigKeys(entry)
 
 		// Match by API key
-		if strings.EqualFold(cfgKey, apiKey) {
+		if claudeHasKey(entryKeys, apiKey) {
 			// If baseURL is specified, also check it
 			if baseURL != "" && cfgBase != "" && !strings.EqualFold(cfgBase, baseURL) {
 				continue
@@ -913,6 +913,32 @@ func resolveClaudeKeyCloakConfig(cfg *config.Config, auth *cliproxyauth.Auth) *c
 	}
 
 	return nil
+}
+
+func claudeConfigKeys(entry *config.ClaudeKey) []string {
+	if entry == nil {
+		return nil
+	}
+	if len(entry.APIKeyEntries) > 0 {
+		return entry.APIKeyEntries
+	}
+	if strings.TrimSpace(entry.APIKey) == "" {
+		return nil
+	}
+	return []string{entry.APIKey}
+}
+
+func claudeHasKey(keys []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for i := range keys {
+		if strings.EqualFold(strings.TrimSpace(keys[i]), target) {
+			return true
+		}
+	}
+	return false
 }
 
 // injectFakeUserID generates and injects a fake user ID into the request metadata.
