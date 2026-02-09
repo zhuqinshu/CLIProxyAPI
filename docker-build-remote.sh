@@ -2,7 +2,12 @@
 #
 # docker-build-remote.sh - 使用 Docker Context 在远程服务器构建镜像
 #
-# 此脚本使用 Docker context 在远程 SSH 服务器 (tx) 上构建镜像
+# 说明：
+# 1) 这个脚本仅负责“远程构建镜像”，不执行前端打包。
+# 2) 请先在项目根目录执行 ../build-management-local.sh，
+#    将前端产物同步到 CLIProxyAPI/static/management.html。
+# 3) 然后再执行本脚本进行远程构建。
+#
 # 镜像名称: eceasy/cli-proxy-api:latest
 
 set -euo pipefail
@@ -10,6 +15,7 @@ set -euo pipefail
 # 配置
 DOCKER_CONTEXT="tx"
 IMAGE_NAME="eceasy/cli-proxy-api:latest"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 颜色输出
 GREEN='\033[0;32m'
@@ -27,6 +33,21 @@ echo_warn() {
 
 echo_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# 输出管理页面本地化说明
+show_local_panel_notes() {
+    echo_info "管理页面本地化说明（不走远端仓库页面）:"
+    echo "  1. 请先执行: ../build-management-local.sh"
+    echo "  2. 确保存在文件: ${SCRIPT_DIR}/static/management.html"
+    echo "  3. 再执行本脚本进行远程镜像构建"
+    echo "  4. 访问方式: http://<host>:8317/management.html"
+    echo ""
+    if [ -f "${SCRIPT_DIR}/static/management.html" ]; then
+        echo_info "检测到本地 management.html: ${SCRIPT_DIR}/static/management.html"
+    else
+        echo_warn "未检测到 ${SCRIPT_DIR}/static/management.html（建议先执行 ../build-management-local.sh）"
+    fi
 }
 
 # 检查 Docker context 是否存在
@@ -89,7 +110,11 @@ verify_image() {
 
 # 主流程
 main() {
+    cd "${SCRIPT_DIR}"
+
     echo_info "=== 开始远程 Docker 构建 ==="
+
+    show_local_panel_notes
     
     check_docker_context
     get_version_info
@@ -109,6 +134,7 @@ main() {
     echo "  docker --context ${DOCKER_CONTEXT} images"
     echo_info "或者在远程服务器上运行:"
     echo "  docker --context ${DOCKER_CONTEXT} run -d -p 8317:8317 ${IMAGE_NAME}"
+    echo_info "如需更新管理页，请先执行 ../build-management-local.sh"
 }
 
 main "$@"

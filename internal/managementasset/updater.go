@@ -29,6 +29,7 @@ const (
 	managementAssetName          = "management.html"
 	httpUserAgent                = "CLIProxyAPI-management-updater"
 	updateCheckInterval          = 3 * time.Hour
+	managementDisableAutoUpdate  = "MANAGEMENT_DISABLE_AUTO_UPDATE"
 )
 
 // ManagementFileName exposes the control panel asset filename.
@@ -188,6 +189,11 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		ctx = context.Background()
 	}
 
+	if isManagementAutoUpdateDisabled() {
+		log.Debug("management asset sync skipped: auto update disabled by env")
+		return
+	}
+
 	if disableControlPanel.Load() {
 		log.Debug("management asset sync skipped: control panel disabled by configuration")
 		return
@@ -278,6 +284,20 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 	}
 
 	log.Infof("management asset updated successfully (hash=%s)", downloadedHash)
+}
+
+func isManagementAutoUpdateDisabled() bool {
+	raw := strings.TrimSpace(os.Getenv(managementDisableAutoUpdate))
+	if raw == "" {
+		return false
+	}
+
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, localPath string) bool {

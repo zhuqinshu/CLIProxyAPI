@@ -14,6 +14,7 @@ services:
     #   - .env
     environment:
       DEPLOY: ${DEPLOY:-}
+      MANAGEMENT_DISABLE_AUTO_UPDATE: ${MANAGEMENT_DISABLE_AUTO_UPDATE:-1}
     ports:
       - "8317:8317"
       - "8085:8085"
