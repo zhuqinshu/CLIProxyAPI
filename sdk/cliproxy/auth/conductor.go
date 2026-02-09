@@ -1585,6 +1585,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 			modelKey = strings.TrimSpace(parsed.ModelName)
 		}
 	}
+	registryRef := registry.GetGlobalRegistry()
 	for _, candidate := range m.auths {
 		if candidate.Provider != provider || candidate.Disabled {
 			continue
@@ -1592,10 +1593,13 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		if _, used := tried[candidate.ID]; used {
 			continue
 		}
-		// 不再检查 ClientSupportsModel，直接尝试请求
-		// 让 API 返回实际的错误（如 404），而不是提前过滤
+		// 检查渠道是否支持请求的模型
+		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
+			continue
+		}
 		candidates = append(candidates, candidate)
 	}
+
 	if len(candidates) == 0 {
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
@@ -1645,6 +1649,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 			modelKey = strings.TrimSpace(parsed.ModelName)
 		}
 	}
+	registryRef := registry.GetGlobalRegistry()
 	for _, candidate := range m.auths {
 		if candidate == nil || candidate.Disabled {
 			continue
@@ -1662,7 +1667,10 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 		if _, ok := m.executors[providerKey]; !ok {
 			continue
 		}
-		// 不再检查 ClientSupportsModel，直接尝试请求
+		// 检查渠道是否支持请求的模型
+		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
+			continue
+		}
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
@@ -2127,6 +2135,14 @@ func debugLogAuthSelection(entry *log.Entry, auth *Auth, provider string, model 
 	if proxyInfo != "" {
 		suffix = " " + proxyInfo
 	}
+	// 添加 base_url 信息
+	baseURL := ""
+	if auth.Attributes != nil {
+		baseURL = strings.TrimSpace(auth.Attributes["base_url"])
+	}
+	if baseURL != "" {
+		suffix = suffix + " -> " + baseURL
+	}
 	switch accountType {
 	case "api_key":
 		entry.Debugf("Use API key %s for model %s%s", util.HideAPIKey(accountInfo), model, suffix)
@@ -2135,6 +2151,7 @@ func debugLogAuthSelection(entry *log.Entry, auth *Auth, provider string, model 
 		entry.Debugf("Use OAuth %s for model %s%s", ident, model, suffix)
 	}
 }
+
 
 func formatOauthIdentity(auth *Auth, provider string, accountInfo string) string {
 	if auth == nil {
