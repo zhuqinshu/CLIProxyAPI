@@ -3,8 +3,8 @@
 # docker-build-remote.sh - 使用 Docker Context 在远程服务器构建镜像
 #
 # 说明：
-# 1) 这个脚本仅负责“远程构建镜像”，不执行前端打包。
-# 2) 请先在项目根目录执行 ../build-management-local.sh，
+# 1) 这个脚本仅负责"远程构建镜像"，不执行前端打包。
+# 2) 请先在前端项目中执行 ../Cli-Proxy-API-Management-Center/build-frontend.sh，
 #    将前端产物同步到 CLIProxyAPI/static/management.html。
 # 3) 然后再执行本脚本进行远程构建。
 #
@@ -13,9 +13,11 @@
 set -euo pipefail
 
 # 配置
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_CONTEXT="tx"
 IMAGE_NAME="eceasy/cli-proxy-api:latest"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRONTEND_BUILD_SCRIPT="${SCRIPT_DIR}/../Cli-Proxy-API-Management-Center/build-frontend.sh"
+REMOTE_COMPOSE_DIR="/home/software/CLIProxyAPI"
 
 # 颜色输出
 GREEN='\033[0;32m'
@@ -38,7 +40,7 @@ echo_error() {
 # 输出管理页面本地化说明
 show_local_panel_notes() {
     echo_info "管理页面本地化说明（不走远端仓库页面）:"
-    echo "  1. 请先执行: ../build-management-local.sh"
+    echo "  1. 请先执行: ../Cli-Proxy-API-Management-Center/build-frontend.sh"
     echo "  2. 确保存在文件: ${SCRIPT_DIR}/static/management.html"
     echo "  3. 再执行本脚本进行远程镜像构建"
     echo "  4. 访问方式: http://<host>:8317/management.html"
@@ -46,7 +48,7 @@ show_local_panel_notes() {
     if [ -f "${SCRIPT_DIR}/static/management.html" ]; then
         echo_info "检测到本地 management.html: ${SCRIPT_DIR}/static/management.html"
     else
-        echo_warn "未检测到 ${SCRIPT_DIR}/static/management.html（建议先执行 ../build-management-local.sh）"
+        echo_warn "未检测到 ${SCRIPT_DIR}/static/management.html（建议先执行 ../Cli-Proxy-API-Management-Center/build-frontend.sh）"
     fi
 }
 
@@ -100,11 +102,25 @@ build_image() {
 # 验证镜像是否存在
 verify_image() {
     echo_info "验证远程服务器上的镜像..."
-    if docker --context "${DOCKER_CONTEXT}" images | grep -q "${IMAGE_NAME}"; then
+    if docker --context "${DOCKER_CONTEXT}" images | grep -q "eceasy/cli-proxy-api"; then
         echo_info "镜像验证成功"
         docker --context "${DOCKER_CONTEXT}" images | grep "eceasy/cli-proxy-api"
     else
         echo_warn "未找到镜像，但构建可能成功"
+    fi
+}
+
+# 重启容器（使用 docker compose 重建）
+restart_container() {
+    echo_info "正在使用新镜像重启容器..."
+    ssh tx "cd ${REMOTE_COMPOSE_DIR} && docker compose up -d --force-recreate"
+
+    if [ $? -eq 0 ]; then
+        echo_info "容器已使用新镜像重启成功"
+    else
+        echo_error "容器重启失败，请手动执行："
+        echo "  ssh tx 'cd ${REMOTE_COMPOSE_DIR} && docker compose up -d'"
+        exit 1
     fi
 }
 
@@ -115,26 +131,25 @@ main() {
     echo_info "=== 开始远程 Docker 构建 ==="
 
     show_local_panel_notes
-    
+
     check_docker_context
     get_version_info
-    
+
     read -p "是否继续构建? [y/N]: " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo_warn "构建已取消"
         exit 0
     fi
-    
+
     build_image
     verify_image
-    
-    echo_info "=== 构建完成 ==="
-    echo_info "你可以使用以下命令查看远程镜像:"
-    echo "  docker --context ${DOCKER_CONTEXT} images"
-    echo_info "或者在远程服务器上运行:"
-    echo "  docker --context ${DOCKER_CONTEXT} run -d -p 8317:8317 ${IMAGE_NAME}"
-    echo_info "如需更新管理页，请先执行 ../build-management-local.sh"
+    restart_container
+
+    echo_info "=== 构建并部署完成 ==="
+    echo_info "容器已使用新镜像重新启动"
+    echo_info "访问管理页: http://<host>:8317/management.html"
+    echo_info "如需更新管理页，请先执行 ../Cli-Proxy-API-Management-Center/build-frontend.sh"
 }
 
 main "$@"

@@ -15,7 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
-	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	internalUsage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -86,6 +86,9 @@ type Service struct {
 
 	// shutdownOnce ensures shutdown is called only once.
 	shutdownOnce sync.Once
+
+	// usageAutoSaveCancel stops the periodic usage statistics auto-save goroutine.
+	usageAutoSaveCancel context.CancelFunc
 
 	// wsGateway manages websocket Gemini providers.
 	wsGateway *wsrelay.Manager
@@ -439,6 +442,33 @@ func (s *Service) Run(ctx context.Context) error {
 
 	usage.StartDefault(ctx)
 
+	// Load persisted usage statistics from file if configured.
+	if statsFile := s.cfg.UsageStatisticsFile; statsFile != "" {
+		stats := internalUsage.GetRequestStatistics()
+		if err := stats.LoadFromFile(statsFile); err != nil {
+			log.Warnf("failed to load usage statistics from %s: %v", statsFile, err)
+		} else {
+			log.Infof("usage statistics loaded from %s", statsFile)
+		}
+		// Start periodic auto-save (every 5 minutes) to guard against crashes.
+		autoSaveCtx, autoSaveCancel := context.WithCancel(context.Background())
+		s.usageAutoSaveCancel = autoSaveCancel
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-autoSaveCtx.Done():
+					return
+				case <-ticker.C:
+					if err := stats.SaveToFile(statsFile); err != nil {
+						log.Warnf("usage statistics auto-save failed: %v", err)
+					}
+				}
+			}
+		}()
+	}
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 	defer func() {
@@ -679,6 +709,20 @@ func (s *Service) Shutdown(ctx context.Context) error {
 				if shutdownErr == nil {
 					shutdownErr = err
 				}
+			}
+		}
+
+		// Stop periodic usage auto-save and perform final save before stopping usage tracking.
+		if s.usageAutoSaveCancel != nil {
+			s.usageAutoSaveCancel()
+			s.usageAutoSaveCancel = nil
+		}
+		if statsFile := s.cfg.UsageStatisticsFile; statsFile != "" {
+			stats := internalUsage.GetRequestStatistics()
+			if err := stats.SaveToFile(statsFile); err != nil {
+				log.Errorf("failed to save usage statistics on shutdown: %v", err)
+			} else {
+				log.Infof("usage statistics saved to %s", statsFile)
 			}
 		}
 

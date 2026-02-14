@@ -65,6 +65,10 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// UsageStatisticsFile is the file path for persisting usage statistics across restarts.
+	// When non-empty, statistics are loaded on startup, saved on shutdown, and auto-saved every 5 minutes.
+	UsageStatisticsFile string `yaml:"usage-statistics-file" json:"usage-statistics-file"`
+
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
@@ -547,6 +551,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.LogsMaxTotalSizeMB = 0
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
+	cfg.UsageStatisticsFile = ""
 	cfg.DisableCooling = false
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
@@ -634,6 +639,12 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
+
+	// Auto-default usage statistics file path when statistics are enabled but no path is set.
+	cfg.UsageStatisticsFile = strings.TrimSpace(cfg.UsageStatisticsFile)
+	if cfg.UsageStatisticsEnabled && cfg.UsageStatisticsFile == "" {
+		cfg.UsageStatisticsFile = "logs/usage-statistics.json"
+	}
 
 	// NOTE: Legacy migration persistence is intentionally disabled together with
 	// startup legacy migration to keep startup read-only for config.yaml.

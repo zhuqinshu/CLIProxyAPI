@@ -5,7 +5,9 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -469,4 +471,58 @@ func formatHour(hour int) string {
 	}
 	hour = hour % 24
 	return fmt.Sprintf("%02d", hour)
+}
+
+// persistedPayload is the on-disk JSON envelope, compatible with the management API export format.
+type persistedPayload struct {
+	Version    int                `json:"version"`
+	ExportedAt time.Time          `json:"exported_at"`
+	Usage      StatisticsSnapshot `json:"usage"`
+}
+
+// SaveToFile writes the current statistics snapshot to path atomically.
+// It writes to a temporary file first, then renames to avoid corruption on crash.
+func (s *RequestStatistics) SaveToFile(path string) error {
+	if s == nil || path == "" {
+		return nil
+	}
+	snapshot := s.Snapshot()
+	payload := persistedPayload{
+		Version:    1,
+		ExportedAt: time.Now().UTC(),
+		Usage:      snapshot,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("usage: marshal statistics: %w", err)
+	}
+	tmpPath := path + ".tmp"
+	if err = os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return fmt.Errorf("usage: write tmp file: %w", err)
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("usage: rename tmp to final: %w", err)
+	}
+	return nil
+}
+
+// LoadFromFile reads a persisted statistics file and merges it into the current store.
+// If the file does not exist, it returns nil (first-run scenario).
+func (s *RequestStatistics) LoadFromFile(path string) error {
+	if s == nil || path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("usage: read statistics file: %w", err)
+	}
+	var payload persistedPayload
+	if err = json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("usage: parse statistics file: %w", err)
+	}
+	s.MergeSnapshot(payload.Usage)
+	return nil
 }
