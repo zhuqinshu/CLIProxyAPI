@@ -36,8 +36,7 @@ COPY config.example.yaml /CLIProxyAPI/config.example.yaml
 COPY config.example.yaml /CLIProxyAPI/config.yaml
 
 # 复制静态文件
-COPY static/ /CLIProxyAPI/static/ 2>/dev/null || true
-
+RUN cp -r static/ /CLIProxyAPI/static/ 2>/dev/null || true
 # 设置环境变量
 ENV TZ=Asia/Shanghai
 ENV PORT=8317
