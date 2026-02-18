@@ -17,6 +17,9 @@ import (
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
+// maxDetailsPerModel caps the number of request details kept per model to bound memory usage.
+const maxDetailsPerModel = 5000
+
 var statisticsEnabled atomic.Bool
 
 func init() {
@@ -67,7 +70,9 @@ type RequestStatistics struct {
 	failureCount  int64
 	totalTokens   int64
 
-	apis map[string]*apiStats
+	apis        map[string]*apiStats
+	providers   map[string]*apiStats
+	credentials map[string]*apiStats
 
 	requestsByDay  map[string]int64
 	requestsByHour map[int]int64
@@ -94,6 +99,8 @@ type RequestDetail struct {
 	Timestamp time.Time  `json:"timestamp"`
 	Source    string     `json:"source"`
 	AuthIndex string     `json:"auth_index"`
+	Provider  string     `json:"provider,omitempty"`
+	AuthID    string     `json:"auth_id,omitempty"`
 	Tokens    TokenStats `json:"tokens"`
 	Failed    bool       `json:"failed"`
 }
@@ -114,7 +121,9 @@ type StatisticsSnapshot struct {
 	FailureCount  int64 `json:"failure_count"`
 	TotalTokens   int64 `json:"total_tokens"`
 
-	APIs map[string]APISnapshot `json:"apis"`
+	APIs        map[string]APISnapshot `json:"apis"`
+	Providers   map[string]APISnapshot `json:"providers,omitempty"`
+	Credentials map[string]APISnapshot `json:"credentials,omitempty"`
 
 	RequestsByDay  map[string]int64 `json:"requests_by_day"`
 	RequestsByHour map[string]int64 `json:"requests_by_hour"`
@@ -145,6 +154,8 @@ func GetRequestStatistics() *RequestStatistics { return defaultRequestStatistics
 func NewRequestStatistics() *RequestStatistics {
 	return &RequestStatistics{
 		apis:           make(map[string]*apiStats),
+		providers:      make(map[string]*apiStats),
+		credentials:    make(map[string]*apiStats),
 		requestsByDay:  make(map[string]int64),
 		requestsByHour: make(map[int]int64),
 		tokensByDay:    make(map[string]int64),
@@ -193,18 +204,40 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	}
 	s.totalTokens += totalTokens
 
+	reqDetail := RequestDetail{
+		Timestamp: timestamp,
+		Source:    record.Source,
+		AuthIndex: record.AuthIndex,
+		Provider:  record.Provider,
+		AuthID:    record.AuthID,
+		Tokens:    detail,
+		Failed:    failed,
+	}
+
 	stats, ok := s.apis[statsKey]
 	if !ok {
 		stats = &apiStats{Models: make(map[string]*modelStats)}
 		s.apis[statsKey] = stats
 	}
-	s.updateAPIStats(stats, modelName, RequestDetail{
-		Timestamp: timestamp,
-		Source:    record.Source,
-		AuthIndex: record.AuthIndex,
-		Tokens:    detail,
-		Failed:    failed,
-	})
+	s.updateAPIStats(stats, modelName, reqDetail)
+
+	if provider := record.Provider; provider != "" {
+		provStats, ok := s.providers[provider]
+		if !ok {
+			provStats = &apiStats{Models: make(map[string]*modelStats)}
+			s.providers[provider] = provStats
+		}
+		s.updateAPIStats(provStats, modelName, reqDetail)
+	}
+
+	if authID := record.AuthID; authID != "" {
+		credStats, ok := s.credentials[authID]
+		if !ok {
+			credStats = &apiStats{Models: make(map[string]*modelStats)}
+			s.credentials[authID] = credStats
+		}
+		s.updateAPIStats(credStats, modelName, reqDetail)
+	}
 
 	s.requestsByDay[dayKey]++
 	s.requestsByHour[hourKey]++
@@ -223,6 +256,28 @@ func (s *RequestStatistics) updateAPIStats(stats *apiStats, model string, detail
 	modelStatsValue.TotalRequests++
 	modelStatsValue.TotalTokens += detail.Tokens.TotalTokens
 	modelStatsValue.Details = append(modelStatsValue.Details, detail)
+	// Trim oldest entries when the details buffer exceeds the cap.
+	if len(modelStatsValue.Details) > maxDetailsPerModel {
+		modelStatsValue.Details = modelStatsValue.Details[len(modelStatsValue.Details)-maxDetailsPerModel:]
+	}
+}
+
+func snapshotAPIStats(stats *apiStats) APISnapshot {
+	snap := APISnapshot{
+		TotalRequests: stats.TotalRequests,
+		TotalTokens:   stats.TotalTokens,
+		Models:        make(map[string]ModelSnapshot, len(stats.Models)),
+	}
+	for modelName, ms := range stats.Models {
+		details := make([]RequestDetail, len(ms.Details))
+		copy(details, ms.Details)
+		snap.Models[modelName] = ModelSnapshot{
+			TotalRequests: ms.TotalRequests,
+			TotalTokens:   ms.TotalTokens,
+			Details:       details,
+		}
+	}
+	return snap
 }
 
 // Snapshot returns a copy of the aggregated metrics for external consumption.
@@ -242,21 +297,17 @@ func (s *RequestStatistics) Snapshot() StatisticsSnapshot {
 
 	result.APIs = make(map[string]APISnapshot, len(s.apis))
 	for apiName, stats := range s.apis {
-		apiSnapshot := APISnapshot{
-			TotalRequests: stats.TotalRequests,
-			TotalTokens:   stats.TotalTokens,
-			Models:        make(map[string]ModelSnapshot, len(stats.Models)),
-		}
-		for modelName, modelStatsValue := range stats.Models {
-			requestDetails := make([]RequestDetail, len(modelStatsValue.Details))
-			copy(requestDetails, modelStatsValue.Details)
-			apiSnapshot.Models[modelName] = ModelSnapshot{
-				TotalRequests: modelStatsValue.TotalRequests,
-				TotalTokens:   modelStatsValue.TotalTokens,
-				Details:       requestDetails,
-			}
-		}
-		result.APIs[apiName] = apiSnapshot
+		result.APIs[apiName] = snapshotAPIStats(stats)
+	}
+
+	result.Providers = make(map[string]APISnapshot, len(s.providers))
+	for name, stats := range s.providers {
+		result.Providers[name] = snapshotAPIStats(stats)
+	}
+
+	result.Credentials = make(map[string]APISnapshot, len(s.credentials))
+	for id, stats := range s.credentials {
+		result.Credentials[id] = snapshotAPIStats(stats)
 	}
 
 	result.RequestsByDay = make(map[string]int64, len(s.requestsByDay))
@@ -367,6 +418,24 @@ func (s *RequestStatistics) recordImported(apiName, modelName string, stats *api
 	s.totalTokens += totalTokens
 
 	s.updateAPIStats(stats, modelName, detail)
+
+	if provider := detail.Provider; provider != "" {
+		provStats, ok := s.providers[provider]
+		if !ok {
+			provStats = &apiStats{Models: make(map[string]*modelStats)}
+			s.providers[provider] = provStats
+		}
+		s.updateAPIStats(provStats, modelName, detail)
+	}
+
+	if authID := detail.AuthID; authID != "" {
+		credStats, ok := s.credentials[authID]
+		if !ok {
+			credStats = &apiStats{Models: make(map[string]*modelStats)}
+			s.credentials[authID] = credStats
+		}
+		s.updateAPIStats(credStats, modelName, detail)
+	}
 
 	dayKey := detail.Timestamp.Format("2006-01-02")
 	hourKey := detail.Timestamp.Hour()
@@ -492,7 +561,7 @@ func (s *RequestStatistics) SaveToFile(path string) error {
 		ExportedAt: time.Now().UTC(),
 		Usage:      snapshot,
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("usage: marshal statistics: %w", err)
 	}

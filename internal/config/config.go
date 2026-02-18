@@ -77,6 +77,10 @@ type Config struct {
 	// MaxRetryInterval defines the maximum wait time in seconds before retrying a cooled-down credential.
 	MaxRetryInterval int `yaml:"max-retry-interval" json:"max-retry-interval"`
 
+	// CredentialTimeout defines the maximum time in seconds to wait for a credential to respond
+	// before switching to the next available credential. 0 disables the timeout.
+	CredentialTimeout int `yaml:"credential-timeout" json:"credential-timeout"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 

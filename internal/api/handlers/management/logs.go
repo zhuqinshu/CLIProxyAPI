@@ -20,6 +20,7 @@ const (
 	defaultLogFileName      = "main.log"
 	logScannerInitialBuffer = 64 * 1024
 	logScannerMaxBuffer     = 8 * 1024 * 1024
+	defaultLogLimit         = 2500
 )
 
 // GetLogs returns log lines with optional incremental loading.
@@ -63,17 +64,32 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid limit: %v", errLimit)})
 		return
 	}
-
-	cutoff := parseCutoff(c.Query("after"))
-	acc := newLogAccumulator(cutoff, limit)
-	for i := range files {
-		if errProcess := acc.consumeFile(files[i]); errProcess != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log file %s: %v", files[i], errProcess)})
-			return
-		}
+	if limit == 0 {
+		limit = defaultLogLimit
 	}
 
-	lines, total, latest := acc.result()
+	cutoff := parseCutoff(c.Query("after"))
+
+	var lines []string
+	var total int
+	var latest int64
+
+	if cutoff == 0 {
+		// Full load: read newest files first, stop as soon as we have enough lines.
+		// collectLogFiles returns oldest-first; reverse to get newest-first.
+		lines, total, latest = readNewestLines(files, limit)
+	} else {
+		// Incremental load: scan all files with cutoff filter (fast, few matching lines).
+		acc := newLogAccumulator(cutoff, limit)
+		for i := range files {
+			if errProcess := acc.consumeFile(files[i]); errProcess != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log file %s: %v", files[i], errProcess)})
+				return
+			}
+		}
+		lines, total, latest = acc.result()
+	}
+
 	if latest == 0 || latest < cutoff {
 		latest = cutoff
 	}
@@ -473,6 +489,84 @@ func (acc *logAccumulator) result() ([]string, int, int64) {
 		acc.lines = []string{}
 	}
 	return acc.lines, acc.total, acc.latest
+}
+
+// readNewestLines reads log files from newest to oldest, collecting the last `limit` lines.
+// It stops reading older files as soon as enough lines have been collected.
+// The `files` slice is expected in oldest-first order (as returned by collectLogFiles).
+func readNewestLines(files []string, limit int) ([]string, int, int64) {
+	if len(files) == 0 {
+		return []string{}, 0, 0
+	}
+
+	// Read files from newest (end of slice) to oldest (start), collecting line chunks.
+	type chunk struct {
+		lines []string
+	}
+	var chunks []chunk
+	var totalLines int
+	var latest int64
+	enough := false
+
+	for i := len(files) - 1; i >= 0 && !enough; i-- {
+		fileLines, ts, err := readFileLines(files[i])
+		if err != nil {
+			continue
+		}
+		if ts > latest {
+			latest = ts
+		}
+		totalLines += len(fileLines)
+		chunks = append(chunks, chunk{lines: fileLines})
+		if limit > 0 && totalLines >= limit {
+			enough = true
+		}
+	}
+
+	// Merge chunks in chronological order (reverse of collection order).
+	var merged []string
+	for i := len(chunks) - 1; i >= 0; i-- {
+		merged = append(merged, chunks[i].lines...)
+	}
+
+	// Trim to the last `limit` lines.
+	if limit > 0 && len(merged) > limit {
+		merged = merged[len(merged)-limit:]
+	}
+
+	if merged == nil {
+		merged = []string{}
+	}
+	return merged, totalLines, latest
+}
+
+// readFileLines reads all lines from a file and returns them along with the latest timestamp found.
+func readFileLines(path string) ([]string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	defer func() { _ = file.Close() }()
+
+	var lines []string
+	var latest int64
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, logScannerInitialBuffer)
+	scanner.Buffer(buf, logScannerMaxBuffer)
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		lines = append(lines, line)
+		if ts := parseTimestamp(line); ts > latest {
+			latest = ts
+		}
+	}
+	if errScan := scanner.Err(); errScan != nil {
+		return lines, latest, errScan
+	}
+	return lines, latest, nil
 }
 
 func parseCutoff(raw string) int64 {

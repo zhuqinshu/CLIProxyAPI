@@ -128,6 +128,11 @@ type Manager struct {
 	requestRetry     atomic.Int32
 	maxRetryInterval atomic.Int64
 
+	// credentialTimeout is the per-credential timeout in nanoseconds.
+	// If a credential does not respond within this duration, the next credential is tried.
+	// 0 disables the timeout.
+	credentialTimeout atomic.Int64
+
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value
 
@@ -384,6 +389,19 @@ func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration) {
 	m.maxRetryInterval.Store(maxRetryInterval.Nanoseconds())
 }
 
+// SetCredentialTimeout sets the per-credential response timeout.
+// If a credential does not respond within this duration, the next credential is tried.
+// 0 disables the timeout.
+func (m *Manager) SetCredentialTimeout(timeout time.Duration) {
+	if m == nil {
+		return
+	}
+	if timeout < 0 {
+		timeout = 0
+	}
+	m.credentialTimeout.Store(timeout.Nanoseconds())
+}
+
 // RegisterExecutor registers a provider executor with the manager.
 func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
 	if executor == nil {
@@ -569,6 +587,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	routeModel := req.Model
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
+	credTimeout := m.getCredentialTimeout()
 	var lastErr error
 	for {
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
@@ -588,14 +607,33 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
 		}
+
+		// Apply per-credential timeout if configured.
+		var credCancel context.CancelFunc
+		if credTimeout > 0 {
+			execCtx, credCancel = context.WithTimeout(execCtx, credTimeout)
+		}
+
 		execReq := req
 		execReq.Model = rewriteModelForAuth(routeModel, auth)
 		execReq.Model = m.applyOAuthModelAlias(auth, execReq.Model)
 		execReq.Model = m.applyAPIKeyModelAlias(auth, execReq.Model)
 		resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
+		if credCancel != nil {
+			credCancel()
+		}
 		result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: errExec == nil}
 		if errExec != nil {
-			if errCtx := execCtx.Err(); errCtx != nil {
+			// Distinguish per-credential timeout from parent context cancellation.
+			if execCtx.Err() != nil && ctx.Err() == nil {
+				entry.WithField("auth_id", auth.ID).Warn("credential timed out, switching to next")
+				debugLogAuthResult(entry, auth, provider, req.Model, false, "credential timeout")
+				result.Error = &Error{Message: "credential timeout"}
+				m.MarkResult(ctx, result)
+				lastErr = errExec
+				continue
+			}
+			if errCtx := ctx.Err(); errCtx != nil {
 				return cliproxyexecutor.Response{}, errCtx
 			}
 			result.Error = &Error{Message: errExec.Error()}
@@ -606,6 +644,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			if ra := retryAfterFromError(errExec); ra != nil {
 				result.RetryAfter = ra
 			}
+			debugLogAuthResult(entry, auth, provider, req.Model, false, errExec.Error())
 			m.MarkResult(execCtx, result)
 			if isRequestInvalidError(errExec) {
 				return cliproxyexecutor.Response{}, errExec
@@ -613,6 +652,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			lastErr = errExec
 			continue
 		}
+		debugLogAuthResult(entry, auth, provider, req.Model, true, "")
 		m.MarkResult(execCtx, result)
 		return resp, nil
 	}
@@ -625,6 +665,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	routeModel := req.Model
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
+	credTimeout := m.getCredentialTimeout()
 	var lastErr error
 	for {
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
@@ -644,14 +685,33 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
 		}
+
+		// Apply per-credential timeout if configured.
+		var credCancel context.CancelFunc
+		if credTimeout > 0 {
+			execCtx, credCancel = context.WithTimeout(execCtx, credTimeout)
+		}
+
 		execReq := req
 		execReq.Model = rewriteModelForAuth(routeModel, auth)
 		execReq.Model = m.applyOAuthModelAlias(auth, execReq.Model)
 		execReq.Model = m.applyAPIKeyModelAlias(auth, execReq.Model)
 		resp, errExec := executor.CountTokens(execCtx, auth, execReq, opts)
+		if credCancel != nil {
+			credCancel()
+		}
 		result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: errExec == nil}
 		if errExec != nil {
-			if errCtx := execCtx.Err(); errCtx != nil {
+			// Distinguish per-credential timeout from parent context cancellation.
+			if execCtx.Err() != nil && ctx.Err() == nil {
+				entry.WithField("auth_id", auth.ID).Warn("credential timed out, switching to next")
+				debugLogAuthResult(entry, auth, provider, req.Model, false, "credential timeout")
+				result.Error = &Error{Message: "credential timeout"}
+				m.MarkResult(ctx, result)
+				lastErr = errExec
+				continue
+			}
+			if errCtx := ctx.Err(); errCtx != nil {
 				return cliproxyexecutor.Response{}, errCtx
 			}
 			result.Error = &Error{Message: errExec.Error()}
@@ -662,6 +722,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			if ra := retryAfterFromError(errExec); ra != nil {
 				result.RetryAfter = ra
 			}
+			debugLogAuthResult(entry, auth, provider, req.Model, false, errExec.Error())
 			m.MarkResult(execCtx, result)
 			if isRequestInvalidError(errExec) {
 				return cliproxyexecutor.Response{}, errExec
@@ -669,6 +730,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			lastErr = errExec
 			continue
 		}
+		debugLogAuthResult(entry, auth, provider, req.Model, true, "")
 		m.MarkResult(execCtx, result)
 		return resp, nil
 	}
@@ -681,6 +743,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	routeModel := req.Model
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
+	credTimeout := m.getCredentialTimeout()
 	var lastErr error
 	for {
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
@@ -704,10 +767,56 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		execReq.Model = rewriteModelForAuth(routeModel, auth)
 		execReq.Model = m.applyOAuthModelAlias(auth, execReq.Model)
 		execReq.Model = m.applyAPIKeyModelAlias(auth, execReq.Model)
-		chunks, errStream := executor.ExecuteStream(execCtx, auth, execReq, opts)
+
+		// Apply per-credential timeout for the initial connection.
+		var chunks <-chan cliproxyexecutor.StreamChunk
+		var errStream error
+		var credCancel context.CancelFunc
+		if credTimeout > 0 {
+			// Use a cancellable context so we can abort if the initial call hangs.
+			credCtx, cancel := context.WithCancel(execCtx)
+			type streamResult struct {
+				chunks <-chan cliproxyexecutor.StreamChunk
+				err    error
+			}
+			resultCh := make(chan streamResult, 1)
+			go func() {
+				ch, err := executor.ExecuteStream(credCtx, auth, execReq, opts)
+				resultCh <- streamResult{ch, err}
+			}()
+			timer := time.NewTimer(credTimeout)
+			select {
+			case res := <-resultCh:
+				timer.Stop()
+				chunks, errStream = res.chunks, res.err
+				if errStream != nil {
+					cancel()
+				} else {
+					// Stream started successfully; keep credCtx alive for the stream goroutine.
+					credCancel = cancel
+				}
+			case <-timer.C:
+				cancel()
+				<-resultCh // wait for goroutine to finish
+				entry.WithField("auth_id", auth.ID).Warn("credential timed out, switching to next")
+				debugLogAuthResult(entry, auth, provider, req.Model, false, "credential timeout")
+				result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: "credential timeout"}}
+				m.MarkResult(ctx, result)
+				lastErr = errors.New("credential timeout")
+				continue
+			case <-ctx.Done():
+				timer.Stop()
+				cancel()
+				<-resultCh
+				return nil, ctx.Err()
+			}
+		} else {
+			chunks, errStream = executor.ExecuteStream(execCtx, auth, execReq, opts)
+		}
+
 		if errStream != nil {
-			if errCtx := execCtx.Err(); errCtx != nil {
-				return nil, errCtx
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
 			rerr := &Error{Message: errStream.Error()}
 			var se cliproxyexecutor.StatusError
@@ -716,6 +825,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
+			debugLogAuthResult(entry, auth, provider, req.Model, false, errStream.Error())
 			m.MarkResult(execCtx, result)
 			if isRequestInvalidError(errStream) {
 				return nil, errStream
@@ -724,7 +834,11 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			continue
 		}
 		out := make(chan cliproxyexecutor.StreamChunk)
-		go func(streamCtx context.Context, streamAuth *Auth, streamProvider string, streamChunks <-chan cliproxyexecutor.StreamChunk) {
+		streamModel := req.Model
+		go func(streamCtx context.Context, streamAuth *Auth, streamProvider string, streamChunks <-chan cliproxyexecutor.StreamChunk, cancelFn context.CancelFunc) {
+			if cancelFn != nil {
+				defer cancelFn()
+			}
 			defer close(out)
 			var failed bool
 			forward := true
@@ -737,6 +851,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 						rerr.HTTPStatus = se.StatusCode()
 					}
 					m.MarkResult(streamCtx, Result{AuthID: streamAuth.ID, Provider: streamProvider, Model: routeModel, Success: false, Error: rerr})
+					debugLogAuthResult(logEntryWithRequestID(streamCtx), streamAuth, streamProvider, streamModel, false, chunk.Err.Error())
 				}
 				if !forward {
 					continue
@@ -753,8 +868,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			if !failed {
 				m.MarkResult(streamCtx, Result{AuthID: streamAuth.ID, Provider: streamProvider, Model: routeModel, Success: true})
+				debugLogAuthResult(logEntryWithRequestID(streamCtx), streamAuth, streamProvider, streamModel, true, "")
 			}
-		}(execCtx, auth.Clone(), provider, chunks)
+		}(execCtx, auth.Clone(), provider, chunks, credCancel)
 		return out, nil
 	}
 }
@@ -1078,6 +1194,13 @@ func (m *Manager) retrySettings() (int, time.Duration) {
 		return 0, 0
 	}
 	return int(m.requestRetry.Load()), time.Duration(m.maxRetryInterval.Load())
+}
+
+func (m *Manager) getCredentialTimeout() time.Duration {
+	if m == nil {
+		return 0
+	}
+	return time.Duration(m.credentialTimeout.Load())
 }
 
 func (m *Manager) closestCooldownWait(providers []string, model string, attempt int) (time.Duration, bool) {
@@ -2177,6 +2300,34 @@ func debugLogAuthSelection(entry *log.Entry, auth *Auth, provider string, model 
 	case "oauth":
 		ident := formatOauthIdentity(auth, provider, accountInfo)
 		entry.Debugf("Use OAuth %s for model %s%s", ident, model, suffix)
+	}
+}
+
+func debugLogAuthResult(entry *log.Entry, auth *Auth, provider string, model string, success bool, errMsg string) {
+	if !log.IsLevelEnabled(log.DebugLevel) {
+		return
+	}
+	if entry == nil || auth == nil {
+		return
+	}
+	accountType, accountInfo := auth.AccountInfo()
+	status := "SUCCESS"
+	if !success {
+		status = "FAILED"
+	}
+	var ident string
+	switch accountType {
+	case "api_key":
+		ident = "API key " + util.HideAPIKey(accountInfo)
+	case "oauth":
+		ident = "OAuth " + formatOauthIdentity(auth, provider, accountInfo)
+	default:
+		ident = accountInfo
+	}
+	if !success && errMsg != "" {
+		entry.Debugf("[%s] %s for model %s: %s", status, ident, model, errMsg)
+	} else {
+		entry.Debugf("[%s] %s for model %s", status, ident, model)
 	}
 }
 
