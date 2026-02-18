@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION
 FROM alpine:3.22.0
 
 # 修改镜像源（在 apk add 之前）
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.cloud.tencent.com/g' /etc/apk/repositories
+# RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.cloud.tencent.com/g' /etc/apk/repositories
 
 RUN apk add --no-cache tzdata ca-certificates
 
@@ -36,7 +36,7 @@ COPY config.example.yaml /CLIProxyAPI/config.example.yaml
 COPY config.example.yaml /CLIProxyAPI/config.yaml
 
 # 复制静态文件
-RUN cp -r static/ /CLIProxyAPI/static/ 2>/dev/null || true
+COPY --from=builder /app/static/ /CLIProxyAPI/static/
 # 设置环境变量
 ENV TZ=Asia/Shanghai
 ENV PORT=8317

@@ -14,10 +14,10 @@ set -euo pipefail
 
 # 配置
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOCKER_CONTEXT="tx"
+DOCKER_CONTEXT="aws"
 IMAGE_NAME="eceasy/cli-proxy-api:latest"
 FRONTEND_BUILD_SCRIPT="${SCRIPT_DIR}/../Cli-Proxy-API-Management-Center/build-frontend.sh"
-REMOTE_COMPOSE_DIR="/home/software/CLIProxyAPI"
+REMOTE_COMPOSE_DIR="/home/ubuntu/CLIProxyAPI"
 
 # 颜色输出
 GREEN='\033[0;32m'
@@ -55,7 +55,7 @@ show_local_panel_notes() {
 # 检查 Docker context 是否存在
 check_docker_context() {
     echo_info "检查 Docker context '${DOCKER_CONTEXT}' 是否存在..."
-    if ! docker context ls | grep -q "^${DOCKER_CONTEXT} "; then
+    if ! docker context inspect "${DOCKER_CONTEXT}" &>/dev/null; then
         echo_error "Docker context '${DOCKER_CONTEXT}' 不存在"
         echo_info "请先创建 Docker context，例如："
         echo "  docker context create ${DOCKER_CONTEXT} --docker \"host=ssh://user@hostname\""
@@ -113,13 +113,13 @@ verify_image() {
 # 重启容器（使用 docker compose 重建）
 restart_container() {
     echo_info "正在使用新镜像重启容器..."
-    ssh tx "cd ${REMOTE_COMPOSE_DIR} && docker compose up -d --force-recreate"
+    ssh aws "cd ${REMOTE_COMPOSE_DIR} && docker compose up -d --force-recreate"
 
     if [ $? -eq 0 ]; then
         echo_info "容器已使用新镜像重启成功"
     else
         echo_error "容器重启失败，请手动执行："
-        echo "  ssh tx 'cd ${REMOTE_COMPOSE_DIR} && docker compose up -d'"
+        echo "  ssh aws 'cd ${REMOTE_COMPOSE_DIR} && docker compose up -d'"
         exit 1
     fi
 }
@@ -134,13 +134,6 @@ main() {
 
     check_docker_context
     get_version_info
-
-    read -p "是否继续构建? [y/N]: " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo_warn "构建已取消"
-        exit 0
-    fi
 
     build_image
     verify_image
