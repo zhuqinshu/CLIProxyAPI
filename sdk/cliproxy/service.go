@@ -785,6 +785,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		provider = "openai-compatibility"
 	}
 	excluded := s.oauthExcludedModels(provider, authKind)
+	keepExistingRegistrationWhenEmpty := false
 	var models []*ModelInfo
 	switch provider {
 	case "gemini":
@@ -814,6 +815,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		models = registry.GetAIStudioModels()
 		models = applyExcludedModels(models, excluded)
 	case "antigravity":
+		// Antigravity models are fetched from upstream at runtime.
+		// Keep previous registration on transient empty fetches.
+		keepExistingRegistrationWhenEmpty = true
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		models = executor.FetchAntigravityModels(ctx, a, s.cfg)
 		cancel()
@@ -930,6 +934,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 				return
 			}
 		}
+		// Preserve unknown provider registrations when model synthesis yields empty results.
+		// This maintains compatibility with externally managed provider integrations.
+		keepExistingRegistrationWhenEmpty = true
 	}
 	models = applyOAuthModelAlias(s.cfg, provider, authKind, models)
 	if len(models) > 0 {
@@ -941,10 +948,16 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		return
 	}
 
-	// 不要在模型列表为空时自动注销客户端
-	// 这可能是由于临时网络故障或 API 错误导致的
-	// 保留现有注册，避免意外移除已注册的模型
-	log.Warnf("模型列表为空，保留客户端 %s 的现有注册（provider=%s）", a.ID, a.Provider)
+	if keepExistingRegistrationWhenEmpty {
+		// 保留现有注册，避免临时网络故障导致模型被意外移除。
+		log.Warnf("模型列表为空，保留客户端 %s 的现有注册（provider=%s）", a.ID, a.Provider)
+		return
+	}
+
+	// 对静态/配置来源：模型列表为空代表显式禁用（例如 excluded-models 过滤全部模型）。
+	// 此时应清理旧注册，避免别名或旧模型继续参与路由。
+	GlobalModelRegistry().UnregisterClient(a.ID)
+	log.Infof("模型列表为空，已注销客户端 %s 的注册（provider=%s）", a.ID, a.Provider)
 }
 
 func (s *Service) resolveConfigClaudeKey(auth *coreauth.Auth) *config.ClaudeKey {
