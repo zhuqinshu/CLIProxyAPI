@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	internalUsage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -24,6 +28,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // Service wraps the proxy server lifecycle so external programs can embed the CLI proxy.
@@ -823,25 +828,39 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		cancel()
 		models = applyExcludedModels(models, excluded)
 	case "claude":
-		models = registry.GetClaudeModels()
-		if entry := s.resolveConfigClaudeKey(a); entry != nil {
+		entry := s.resolveConfigClaudeKey(a)
+		if entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildClaudeConfigModels(entry)
+			} else {
+				models = fetchUpstreamOpenAIStyleModelsForAuth(a, "claude", "anthropic", "")
 			}
 			if authKind == "apikey" {
 				excluded = entry.ExcludedModels
 			}
+		} else {
+			models = fetchUpstreamOpenAIStyleModelsForAuth(a, "claude", "anthropic", "")
+		}
+		if len(models) == 0 {
+			models = registry.GetClaudeModels()
 		}
 		models = applyExcludedModels(models, excluded)
 	case "codex":
-		models = registry.GetOpenAIModels()
-		if entry := s.resolveConfigCodexKey(a); entry != nil {
+		entry := s.resolveConfigCodexKey(a)
+		if entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildCodexConfigModels(entry)
+			} else {
+				models = fetchUpstreamOpenAIStyleModelsForAuth(a, "codex", "openai", "")
 			}
 			if authKind == "apikey" {
 				excluded = entry.ExcludedModels
 			}
+		} else {
+			models = fetchUpstreamOpenAIStyleModelsForAuth(a, "codex", "openai", "")
+		}
+		if len(models) == 0 {
+			models = registry.GetOpenAIModels()
 		}
 		models = applyExcludedModels(models, excluded)
 	case "qwen":
@@ -896,6 +915,21 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 				compat := &s.cfg.OpenAICompatibility[i]
 				if strings.EqualFold(compat.Name, compatName) {
 					isCompatAuth = true
+					if len(compat.Models) == 0 {
+						dynamic := fetchUpstreamOpenAIStyleModelsForAuth(
+							a,
+							"openai-compatibility",
+							compat.Name,
+							strings.TrimSpace(compat.BaseURL),
+						)
+						if len(dynamic) > 0 {
+							if providerKey == "" {
+								providerKey = "openai-compatibility"
+							}
+							GlobalModelRegistry().RegisterClient(a.ID, providerKey, applyModelPrefixes(dynamic, a.Prefix, s.cfg.ForceModelPrefix))
+							return
+						}
+					}
 					// Convert compatibility models to registry models
 					ms := make([]*ModelInfo, 0, len(compat.Models))
 					for j := range compat.Models {
@@ -1123,6 +1157,206 @@ func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 		return nil
 	}
 	return cfg.OAuthExcludedModels[providerKey]
+}
+
+func fetchUpstreamOpenAIStyleModelsForAuth(a *coreauth.Auth, provider, ownedBy, baseOverride string) []*ModelInfo {
+	if a == nil {
+		return nil
+	}
+
+	baseURL := strings.TrimSpace(baseOverride)
+	if baseURL == "" && a.Attributes != nil {
+		baseURL = strings.TrimSpace(a.Attributes["base_url"])
+	}
+	if baseURL == "" {
+		return nil
+	}
+
+	token := ""
+	if a.Attributes != nil {
+		token = strings.TrimSpace(a.Attributes["api_key"])
+	}
+	if token == "" && a.Metadata != nil {
+		if v, ok := a.Metadata["access_token"].(string); ok {
+			token = strings.TrimSpace(v)
+		}
+	}
+	if token == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	models := fetchUpstreamOpenAIStyleModels(ctx, provider, ownedBy, baseURL, token, a.Attributes)
+	if len(models) > 0 {
+		log.Debugf("upstream model discovery succeeded: provider=%s auth=%s models=%d", provider, a.ID, len(models))
+	}
+	return models
+}
+
+func fetchUpstreamOpenAIStyleModels(
+	ctx context.Context,
+	provider, ownedBy, baseURL, token string,
+	attrs map[string]string,
+) []*ModelInfo {
+	endpoints := buildOpenAIStyleModelDiscoveryEndpoints(baseURL)
+	if len(endpoints) == 0 {
+		return nil
+	}
+
+	httpClient := &http.Client{Timeout: 8 * time.Second}
+	for _, endpoint := range endpoints {
+		httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if errReq != nil {
+			continue
+		}
+		httpReq.Header.Set("Accept", "application/json")
+		applyOpenAIStyleModelDiscoveryAuthHeaders(httpReq, provider, token)
+		util.ApplyCustomHeadersFromAttrs(httpReq, attrs)
+
+		httpResp, errDo := httpClient.Do(httpReq)
+		if errDo != nil {
+			continue
+		}
+		body, errRead := io.ReadAll(httpResp.Body)
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Debugf("upstream model discovery close body error: %v", errClose)
+		}
+		if errRead != nil {
+			continue
+		}
+		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+			continue
+		}
+		models := parseOpenAIStyleModelDiscoveryBody(body, provider, ownedBy)
+		if len(models) > 0 {
+			return models
+		}
+	}
+
+	return nil
+}
+
+func applyOpenAIStyleModelDiscoveryAuthHeaders(r *http.Request, provider, token string) {
+	if r == nil || token == "" {
+		return
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	host := ""
+	if r.URL != nil {
+		host = strings.ToLower(strings.TrimSpace(r.URL.Hostname()))
+	}
+
+	if provider == "claude" && host == "api.anthropic.com" {
+		r.Header.Del("Authorization")
+		r.Header.Set("x-api-key", token)
+		r.Header.Set("Anthropic-Version", "2023-06-01")
+		return
+	}
+
+	r.Header.Set("Authorization", "Bearer "+token)
+}
+
+func buildOpenAIStyleModelDiscoveryEndpoints(baseURL string) []string {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return nil
+	}
+	if !strings.Contains(baseURL, "://") {
+		baseURL = "https://" + baseURL
+	}
+	parsed, errParse := url.Parse(baseURL)
+	if errParse != nil || strings.TrimSpace(parsed.Host) == "" {
+		return nil
+	}
+
+	base := strings.TrimRight(parsed.String(), "/")
+	out := make([]string, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	if strings.HasSuffix(strings.ToLower(base), "/v1") {
+		add(base + "/models")
+	} else {
+		add(base + "/v1/models")
+		add(base + "/models")
+	}
+	return out
+}
+
+func parseOpenAIStyleModelDiscoveryBody(body []byte, provider, ownedBy string) []*ModelInfo {
+	root := gjson.ParseBytes(body)
+	items := root.Get("data")
+	if !items.Exists() || !items.IsArray() {
+		items = root.Get("models")
+	}
+	if !items.Exists() || !items.IsArray() {
+		return nil
+	}
+
+	now := time.Now().Unix()
+	out := make([]*ModelInfo, 0, len(items.Array()))
+	seen := make(map[string]struct{}, len(items.Array()))
+	for _, item := range items.Array() {
+		modelID := strings.TrimSpace(item.Get("id").String())
+		if modelID == "" {
+			modelID = strings.TrimSpace(item.Get("name").String())
+		}
+		modelID = strings.TrimSpace(strings.TrimPrefix(modelID, "models/"))
+		if modelID == "" {
+			continue
+		}
+
+		key := strings.ToLower(modelID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		displayName := strings.TrimSpace(item.Get("display_name").String())
+		if displayName == "" {
+			displayName = strings.TrimSpace(item.Get("displayName").String())
+		}
+		if displayName == "" {
+			displayName = strings.TrimSpace(item.Get("name").String())
+		}
+		if displayName == "" {
+			displayName = modelID
+		}
+
+		created := item.Get("created").Int()
+		if created <= 0 {
+			created = now
+		}
+		owner := strings.TrimSpace(item.Get("owned_by").String())
+		if owner == "" {
+			owner = ownedBy
+		}
+		if owner == "" {
+			owner = provider
+		}
+
+		out = append(out, &ModelInfo{
+			ID:          modelID,
+			Object:      "model",
+			Created:     created,
+			OwnedBy:     owner,
+			Type:        provider,
+			DisplayName: displayName,
+		})
+	}
+
+	return out
 }
 
 func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {

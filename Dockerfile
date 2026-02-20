@@ -1,6 +1,6 @@
-FROM golang:1.24-alpine AS builder
+FROM docker.1ms.run/golang:1.24-alpine AS builder
 
-ENV GOPROXY=https://mirrors.cloud.tencent.com/go/,direct
+# ENV GOPROXY=https://mirrors.cloud.tencent.com/go/,direct
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPI ./cmd/server/
 
-FROM alpine:3.22.0
+FROM docker.1ms.run/alpine:3.22.0
 
 # 修改镜像源（在 apk add 之前）
 # RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.cloud.tencent.com/g' /etc/apk/repositories
@@ -33,7 +33,7 @@ RUN chmod +x /CLIProxyAPI/CLIProxyAPI
 
 # 复制配置文件（两份：example 和默认）
 COPY config.example.yaml /CLIProxyAPI/config.example.yaml
-COPY config.example.yaml /CLIProxyAPI/config.yaml
+COPY config.yaml /CLIProxyAPI/config.yaml
 
 # 复制静态文件
 COPY --from=builder /app/static/ /CLIProxyAPI/static/
@@ -46,5 +46,5 @@ RUN cp /usr/share/zoneinfo/${TZ} /etc/localtime && echo "${TZ}" > /etc/timezone
 EXPOSE 8317
 
 # 启动命令 - 如果应用需要指定配置文件，使用下面注释的版本
-CMD ["./CLIProxyAPI"]
-# CMD ["./CLIProxyAPI", "--config", "config.yaml"]
+# CMD ["./CLIProxyAPI"]
+CMD ["./CLIProxyAPI", "--config", "config.yaml"]
