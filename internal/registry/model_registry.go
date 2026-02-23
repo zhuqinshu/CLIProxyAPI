@@ -110,6 +110,8 @@ type ModelRegistry struct {
 	clientModelInfos map[string]map[string]*ModelInfo
 	// clientProviders maps client ID to its provider identifier
 	clientProviders map[string]string
+	// clientConfigKeys maps client ID to a config entry identifier (e.g., config name or index)
+	clientConfigKeys map[string]string
 	// mutex ensures thread-safe access to the registry
 	mutex *sync.RWMutex
 	// hook is an optional callback sink for model registration changes
@@ -128,6 +130,7 @@ func GetGlobalRegistry() *ModelRegistry {
 			clientModels:     make(map[string][]string),
 			clientModelInfos: make(map[string]map[string]*ModelInfo),
 			clientProviders:  make(map[string]string),
+			clientConfigKeys: make(map[string]string),
 			mutex:            &sync.RWMutex{},
 		}
 	})
@@ -232,6 +235,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		delete(r.clientModels, clientID)
 		delete(r.clientModelInfos, clientID)
 		delete(r.clientProviders, clientID)
+		delete(r.clientConfigKeys, clientID)
 		misc.LogCredentialSeparator()
 		return
 	}
@@ -258,6 +262,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 			r.clientProviders[clientID] = provider
 		} else {
 			delete(r.clientProviders, clientID)
+		delete(r.clientConfigKeys, clientID)
 		}
 		r.triggerModelsRegistered(provider, clientID, models)
 		log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(rawModelIDs))
@@ -400,6 +405,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		r.clientProviders[clientID] = provider
 	} else {
 		delete(r.clientProviders, clientID)
+		delete(r.clientConfigKeys, clientID)
 	}
 
 	r.triggerModelsRegistered(provider, clientID, models)
@@ -537,6 +543,7 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	if !exists {
 		if hasProvider {
 			delete(r.clientProviders, clientID)
+		delete(r.clientConfigKeys, clientID)
 		}
 		return
 	}
@@ -580,6 +587,7 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	delete(r.clientModelInfos, clientID)
 	if hasProvider {
 		delete(r.clientProviders, clientID)
+		delete(r.clientConfigKeys, clientID)
 	}
 	log.Debugf("Unregistered client %s", clientID)
 	// Separator line after completing client unregistration (after the summary line)
@@ -872,6 +880,86 @@ func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelIn
 		}
 	}
 
+	return result
+}
+
+// SetClientConfigKey associates a config entry identifier with a registered client.
+// This allows grouping runtime models by their originating channel configuration.
+func (r *ModelRegistry) SetClientConfigKey(clientID, configKey string) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if configKey == "" {
+		return
+	}
+	r.clientConfigKeys[clientID] = configKey
+}
+
+// GetAvailableModelsGrouped returns runtime available models for a provider,
+// grouped by config key (channel configuration identifier).
+// Models from clients without a config key are grouped under "".
+func (r *ModelRegistry) GetAvailableModelsGrouped(provider string) map[string][]*ModelInfo {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return nil
+	}
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	// Collect models per config key, deduplicating by model ID within each group
+	type groupEntry struct {
+		seen   map[string]bool
+		models []*ModelInfo
+	}
+	groups := make(map[string]*groupEntry)
+
+	for clientID, clientProvider := range r.clientProviders {
+		if clientProvider != provider {
+			continue
+		}
+		modelIDs := r.clientModels[clientID]
+		if len(modelIDs) == 0 {
+			continue
+		}
+
+		configKey := r.clientConfigKeys[clientID]
+		entry := groups[configKey]
+		if entry == nil {
+			entry = &groupEntry{seen: make(map[string]bool)}
+			groups[configKey] = entry
+		}
+
+		clientInfos := r.clientModelInfos[clientID]
+		for _, modelID := range modelIDs {
+			modelID = strings.TrimSpace(modelID)
+			if modelID == "" || entry.seen[modelID] {
+				continue
+			}
+			entry.seen[modelID] = true
+
+			var info *ModelInfo
+			if clientInfos != nil {
+				info = clientInfos[modelID]
+			}
+			if info == nil {
+				if reg, ok := r.models[modelID]; ok && reg != nil && reg.Info != nil {
+					info = reg.Info
+				}
+			}
+			if info != nil {
+				entry.models = append(entry.models, info)
+			}
+		}
+	}
+
+	if len(groups) == 0 {
+		return nil
+	}
+
+	result := make(map[string][]*ModelInfo, len(groups))
+	for key, entry := range groups {
+		result[key] = entry.models
+	}
 	return result
 }
 

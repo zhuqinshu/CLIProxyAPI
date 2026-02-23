@@ -12,11 +12,13 @@ type ModelRegistryHook = registry.ModelRegistryHook
 type ModelRegistry interface {
 	RegisterClient(clientID, clientProvider string, models []*ModelInfo)
 	UnregisterClient(clientID string)
+	SetClientConfigKey(clientID, configKey string)
 	SetModelQuotaExceeded(clientID, modelID string)
 	ClearModelQuotaExceeded(clientID, modelID string)
 	ClientSupportsModel(clientID, modelID string) bool
 	GetAvailableModels(handlerType string) []map[string]any
 	GetAvailableModelsByProvider(provider string) []*ModelInfo
+	GetAvailableModelsGrouped(provider string) map[string][]*ModelInfo
 }
 
 // GlobalModelRegistry returns the shared registry instance.

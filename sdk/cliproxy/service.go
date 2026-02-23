@@ -792,10 +792,12 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	excluded := s.oauthExcludedModels(provider, authKind)
 	keepExistingRegistrationWhenEmpty := false
 	var models []*ModelInfo
+	var configKey string // tracks which config entry this client belongs to
 	switch provider {
 	case "gemini":
 		models = registry.GetGeminiModels()
 		if entry := s.resolveConfigGeminiKey(a); entry != nil {
+			configKey = s.geminiConfigKey(a)
 			if len(entry.Models) > 0 {
 				models = buildGeminiConfigModels(entry)
 			}
@@ -809,6 +811,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		models = registry.GetGeminiVertexModels()
 		if authKind == "apikey" {
 			if entry := s.resolveConfigVertexCompatKey(a); entry != nil && len(entry.Models) > 0 {
+				configKey = s.vertexConfigKey(a)
 				models = buildVertexCompatConfigModels(entry)
 			}
 		}
@@ -830,6 +833,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	case "claude":
 		entry := s.resolveConfigClaudeKey(a)
 		if entry != nil {
+			configKey = s.claudeConfigKey(a)
 			if len(entry.Models) > 0 {
 				models = buildClaudeConfigModels(entry)
 			} else {
@@ -848,6 +852,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	case "codex":
 		entry := s.resolveConfigCodexKey(a)
 		if entry != nil {
+			configKey = s.codexConfigKey(a)
 			if len(entry.Models) > 0 {
 				models = buildCodexConfigModels(entry)
 			} else {
@@ -979,6 +984,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 			key = strings.ToLower(strings.TrimSpace(a.Provider))
 		}
 		GlobalModelRegistry().RegisterClient(a.ID, key, applyModelPrefixes(models, a.Prefix, s.cfg != nil && s.cfg.ForceModelPrefix))
+		if configKey != "" {
+			GlobalModelRegistry().SetClientConfigKey(a.ID, configKey)
+		}
 		return
 	}
 
@@ -992,6 +1000,61 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	// 此时应清理旧注册，避免别名或旧模型继续参与路由。
 	GlobalModelRegistry().UnregisterClient(a.ID)
 	log.Infof("模型列表为空，已注销客户端 %s 的注册（provider=%s）", a.ID, a.Provider)
+}
+
+// configKeyFromAuth returns a stable config identifier from auth attributes.
+// It uses the config entry's name (preferred) or falls back to api_key.
+func configKeyFromAuth(a *coreauth.Auth, fallbackPrefix string) string {
+	if a == nil || a.Attributes == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(a.Attributes["config_name"]); name != "" {
+		return name
+	}
+	if key := strings.TrimSpace(a.Attributes["api_key"]); key != "" {
+		return key
+	}
+	return ""
+}
+
+func (s *Service) claudeConfigKey(a *coreauth.Auth) string {
+	if key := configKeyFromAuth(a, "claude"); key != "" {
+		return key
+	}
+	entry := s.resolveConfigClaudeKey(a)
+	if entry != nil && entry.Name != "" {
+		return entry.Name
+	}
+	return ""
+}
+
+func (s *Service) codexConfigKey(a *coreauth.Auth) string {
+	if key := configKeyFromAuth(a, "codex"); key != "" {
+		return key
+	}
+	entry := s.resolveConfigCodexKey(a)
+	if entry != nil && entry.Name != "" {
+		return entry.Name
+	}
+	return ""
+}
+
+func (s *Service) geminiConfigKey(a *coreauth.Auth) string {
+	if a != nil && a.Attributes != nil {
+		if key := strings.TrimSpace(a.Attributes["api_key"]); key != "" {
+			return key
+		}
+	}
+	return ""
+}
+
+func (s *Service) vertexConfigKey(a *coreauth.Auth) string {
+	if a != nil && a.Attributes != nil {
+		if key := strings.TrimSpace(a.Attributes["api_key"]); key != "" {
+			return key
+		}
+	}
+	return ""
 }
 
 func (s *Service) resolveConfigClaudeKey(auth *coreauth.Auth) *config.ClaudeKey {
