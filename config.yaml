@@ -1,0 +1,164 @@
+port: 8317
+tls:
+  enable: false
+remote-management:
+  allow-remote: true
+  secret-key: $2a$10$6CDhc2urT9IZrYamHVlaie5ztwaJr6IH4FB675KwtPLO80FFy4g3W
+  disable-control-panel: false
+  panel-github-repository: https://github.com/zhuqinshu/Cli-Proxy-API-Management-Center.git
+auth-dir: ~/.cli-proxy-api
+transient-retry-interval: 10
+credential-timeout: 20
+api-keys:
+  - sk-test
+debug: true
+logging-to-file: true
+usage-statistics-enabled: true
+force-model-prefix: false
+request-retry: 10
+max-retry-interval: 30
+quota-exceeded:
+  switch-project: false
+  switch-preview-model: false
+ws-auth: false
+claude-api-key:
+  - name: claude-api-hotaruapi-top
+    base-url: https://api.hotaruapi.top
+    api-key-entries:
+      - sk-Fw5QVC9dT6H6UAgkzwzvbObHZfiqEqQfDuTOMo6FRjcsH4Tu
+      - sk-zDoIQUfzGDj0CM1FjB6Zu5XnmlGyEisPew3AnZ380YaBIfzb
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+  - name: claude-betterclau-de
+    base-url: https://anyrouter.top
+    api-key-entries:
+      - sk-gZe5fYVOkDK8YjDd0vt8e1hchkwCjD2lgkr5l21gqyS7XqcV
+      - sk-3kpOJedaI9AmUXlj1eF59KWEIgOy1Dd96GiWgTTMOy94Nj8o
+      - sk-g7RVUOI9gaVhT7AEI2zPdbeQrkT4lkKjQu3blvurUfuxkG1d
+    models:
+      - name: claude-opus-4-6
+        alias: any-opus-4-6
+      - name: claude-sonnet-4-6
+        alias: any-sonnet-4-6
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+      - claude-opus-4-5-20251101
+  - name: claude-code-newcli-com
+    base-url: https://code.newcli.com/claude/aws
+    api-key-entries:
+      - sk-ant-oat01-AmfxIe9OATM-Q5m53t6mvh4mDVUDypb4ieKvFK6NtnHFZhBwMow6d9sQONRbpPjbVVO8s7a5eJVzgmaBNy26oXVqJ2qe3AA
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+  - name: claude-openai-api-test-us-ci
+    base-url: https://openai.api-test.us.ci/
+    api-key-entries:
+      - sk-URCD4hI6VgnIOOdvokoSmWyJ2znMDTBKKv9F6hn9g53bJJm9
+      - sk-mjoUeVml1WXJhfp3FQIT9CfgsCMCW77l0WVardtBNEKFtgPx
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+  - name: claude-wzw-pp-ua-copy
+    base-url: https://wzw.pp.ua
+    api-key-entries:
+      - sk-j2A4IZ8jCYJuHc8IopHarUp2vRYL09MAToeOjF2FPs6ahBv2
+      - sk-vIezvFbuIcS0JSm9rbwuZX7zUz0A2n0GqPlpcrpvQ9MoQdeN
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+      - claude-opus-4-6
+  - name: 随时跑路
+    base-url: https://runanytime.hxi.me/
+    api-key-entries:
+      - sk-digfyd2zUlzMBddzoaegaMRiR5RHpkWsVKEtCdN77wZOQUYU
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+      - gpt-4o-2024-11-20
+      - gpt-5-2025-08-07
+      - gpt-5.1-latest
+      - gpt-5-nano-2025-08-07
+      - gpt-5.2-latest
+      - gpt-5-mini-2025-08-07
+      - gpt-4.1-2025-04-14
+      - gpt-5.1-codex
+      - gpt-5.2-codex
+      - gpt-5.2
+request-log: false
+disable-cooling: true
+openai-compatibility:
+  - name: x666.me
+    base-url: https://x666.me/
+    api-key-entries:
+      - api-key: sk-6Az37vOHDNMxtRKOx8afNBcBGhkicwUYQ8IfQ5YyzVP1muWz
+      - api-key: sk-TNmkFHplE6LGVTH6UStBUhPrdYYD4WxVGsr4O9hQYOXgF1zJ
+    models:
+      - name: gpt-4.1-mini
+        alias: ""
+      - name: gpt-4.1-nano
+        alias: ""
+      - name: gpt-4o-mini
+        alias: ""
+ampcode:
+  upstream-url: ""
+  upstream-api-key: ""
+  restrict-management-to-localhost: false
+  model-mappings: []
+  force-model-mappings: false
+oauth-model-alias:
+  antigravity:
+    - name: claude-sonnet-4-5
+      alias: ding-opus-plus-max
+pprof:
+  enable: false
+  addr: 127.0.0.1:8316
+error-logs-max-files: 10
+routing:
+  strategy: round-robin
+oauth-excluded-models:
+  antigravity:
+    - gpt-oss-120b-medium
+    - tab_flash_lite_preview
+    - claude-opus-4-5-thinking
+    - claude-sonnet-4-5-thinking
+codex-api-key:
+  - name: codex-ai-qaq-al
+    base-url: https://ai.qaq.al/
+    api-key-entries:
+      - sk-5daa8ac19986fbed425ffe913d62100e680dbc833dfbfb9d8c3cf76eae9f6251
+      - sk-c58aabd5894c9c439809d4c45e34a18ee4a04beecc69a28a098a71a0d145c81d
+    excluded-models:
+      - claude-3-5-haiku-20241022
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-sonnet-4-20250514
+      - claude-opus-4-1-20250805
+      - gpt-5
+      - gpt-5.1
+      - gpt-5-codex-mini
+      - gpt-5-codex
+      - gpt-5.1-codex
+      - gpt-oss-120b-medium
+      - gpt-5.1-codex-max
+      - gpt-5.1-codex-mini
+usage-statistics-file: logs/usage-statistics.json
